@@ -1,9 +1,9 @@
 /**
- * desktop-quick-launcher — host half.
+ * dsh-desktop_quick_launcher — host half.
  *
  * Migrated core logic from the retired @linxin666/dsh-desktop-launcher
  * (Apache-2.0): serves a loopback-only API family under
- * /api/desktop-quick-launcher:
+ * /api/dsh-desktop_quick_launcher:
  *   - POST /create   writes the launcher script under <dsh-home>/
  *                    desktop-quick-launcher/ and places a double-click icon on
  *                    the Desktop (Windows .lnk / macOS .command / Linux
@@ -13,7 +13,7 @@
  *
  * It also owns a schemastery settings section (`desktop-quick-launcher`
  * namespace, edited from Settings) and an optional system-prompt section. The
- * browser half (./client) renders a floating control that triggers both
+ * browser half (./client) renders a floating power button that triggers both
  * routes. Everything rides the official DSH SDK packages; no dsh source
  * changes.
  */
@@ -45,10 +45,13 @@ import {
   type LauncherSpec,
 } from './core/launcher'
 
+/** Re-exported for tooling: render the launcher body for a platform+spec. */
+export { renderLauncherScript } from './core/launcher'
+
 const execFileAsync = promisify(execFile)
 
 /** Stable cordis plugin name. */
-export const name = 'desktop-quick-launcher'
+export const name = 'dsh-desktop_quick_launcher'
 
 /** Host services this plugin consumes. */
 export const inject = ['webServer', 'systemPrompt']
@@ -56,9 +59,9 @@ export const inject = ['webServer', 'systemPrompt']
 /** Wire contract between host routes and the browser API helpers. */
 export const LAUNCHER_API = {
   /** Create (or refresh) the desktop icon. */
-  create: '/api/desktop-quick-launcher/create',
+  create: '/api/dsh-desktop_quick_launcher/create',
   /** Request the host process to exit gracefully. */
-  shutdown: '/api/desktop-quick-launcher/shutdown',
+  shutdown: '/api/dsh-desktop_quick_launcher/shutdown',
 } as const
 
 /** Result of a desktop-icon creation. */

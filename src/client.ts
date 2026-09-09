@@ -1,11 +1,14 @@
 /**
- * desktop-quick-launcher — browser half.
+ * dsh-desktop_quick_launcher — browser half.
  *
- * A small floating control (bottom-right) independent of the sidebar layout:
- *   - 「生成桌面图标」 POST /api/desktop-quick-launcher/create
- *   - 「停止服务」    POST /api/desktop-quick-launcher/shutdown
- * Deliberately zero client-SDK dependencies: plain fetch + react-dom, styled
- * inline. The Host half enforces the loopback-only fence.
+ * A small circular power button pinned to the bottom-right corner of the dsh
+ * web page. Clicking it opens a custom confirmation dialog (instead of the
+ * native confirm); confirming POSTs /api/dsh-desktop_quick_launcher/shutdown
+ * and the host process exits gracefully. A second small button creates or
+ * refreshes the desktop launcher icon (POST /create) with an inline toast.
+ *
+ * Zero client-SDK dependencies: plain fetch + react-dom, inline styles. The
+ * Host half enforces the loopback-only fence on both routes.
  */
 
 import { createElement, useState, type CSSProperties } from 'react'
@@ -13,11 +16,11 @@ import { createRoot, type Root } from 'react-dom/client'
 
 /** Same-origin /api surface, spelled to match the Host half. */
 const API = {
-  create: '/api/desktop-quick-launcher/create',
-  shutdown: '/api/desktop-quick-launcher/shutdown',
+  create: '/api/dsh-desktop_quick_launcher/create',
+  shutdown: '/api/dsh-desktop_quick_launcher/shutdown',
 } as const
 
-export const name = 'desktop-quick-launcher-client'
+export const name = 'dsh-desktop_quick_launcher'
 
 /** No cordis services are required in the browser. */
 export const inject: string[] = []
@@ -28,28 +31,32 @@ function lang(): 'zh' | 'en' {
 
 const T = {
   zh: {
-    title: 'DSH 快速启动',
-    create: '生成桌面图标',
-    creating: '生成中…',
-    shutdown: '停止服务',
-    stopping: '停止中…',
-    confirmShutdown: '确定要停止 DSH Web 服务吗？当前页面将断开。',
-    close: '关闭',
-    ok: '已生成：',
-    errCreate: '生成失败：',
+    powerTitle: '停止 DSH Web 服务',
+    iconTitle: '生成/刷新桌面图标',
+    confirmHead: '停止 DSH Web 服务？',
+    confirmBody: '宿主进程将被优雅退出，当前页面会断开连接。正在运行的会话或任务可能中断。',
+    cancel: '取消',
+    stop: '确认停止',
+    stopping: '正在退出…',
+    exitSent: '已请求退出，正在断开…',
     errShutdown: '停止请求失败：',
+    toastOk: '已生成：',
+    toastWarn: '警告：',
+    errCreate: '生成失败：',
   },
   en: {
-    title: 'DSH Quick Launcher',
-    create: 'Create desktop icon',
-    creating: 'Creating…',
-    shutdown: 'Stop service',
+    powerTitle: 'Stop the DSH web service',
+    iconTitle: 'Create / refresh desktop icon',
+    confirmHead: 'Stop the DSH web service?',
+    confirmBody: 'The host process will exit and this page will disconnect. Running sessions or tasks may be interrupted.',
+    cancel: 'Cancel',
+    stop: 'Stop',
     stopping: 'Stopping…',
-    confirmShutdown: 'Stop the DSH web service? This page will disconnect.',
-    close: 'Close',
-    ok: 'Created: ',
-    errCreate: 'Create failed: ',
+    exitSent: 'Exit requested, disconnecting…',
     errShutdown: 'Shutdown request failed: ',
+    toastOk: 'Created: ',
+    toastWarn: 'Warning: ',
+    errCreate: 'Create failed: ',
   },
 }[lang()]
 
@@ -84,94 +91,177 @@ function closeCurrentPage(): void {
   if (!window.closed) window.location.replace('about:blank')
 }
 
-const PANEL_STYLE: CSSProperties = {
+// ---- styles (inline) ------------------------------------------------------
+
+const ROUND_BTN: CSSProperties = {
+  width: '44px',
+  height: '44px',
+  borderRadius: '50%',
+  border: '1px solid rgba(255,255,255,.14)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  cursor: 'pointer',
+  color: '#fff',
+  boxShadow: '0 4px 14px rgba(0,0,0,.35)',
+}
+
+const OVERLAY: CSSProperties = {
   position: 'fixed',
-  right: '18px',
-  bottom: '18px',
-  zIndex: 2147483000,
-  fontFamily: 'inherit',
+  inset: '0',
+  zIndex: 2147483001,
+  background: 'rgba(0,0,0,.5)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+}
+
+const DIALOG: CSSProperties = {
   background: '#1B1E27',
   color: '#F2F3F5',
   borderRadius: '14px',
-  padding: '12px 14px',
-  minWidth: '230px',
-  boxShadow: '0 8px 30px rgba(0,0,0,.45)',
+  padding: '20px 22px',
+  width: 'min(360px, 86vw)',
+  boxShadow: '0 10px 40px rgba(0,0,0,.5)',
   border: '1px solid rgba(255,255,255,.08)',
-  fontSize: '13px',
-  lineHeight: '1.5',
+  fontSize: '14px',
+  lineHeight: 1.6,
 }
-const ROW_STYLE: CSSProperties = { display: 'flex', gap: '8px', marginTop: '8px' }
-const BTN_STYLE: CSSProperties = {
+
+const DIALOG_ACTIONS: CSSProperties = { display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '18px' }
+
+const BTN: CSSProperties = {
   border: '0',
   borderRadius: '8px',
-  padding: '6px 10px',
+  padding: '7px 16px',
   cursor: 'pointer',
-  fontSize: '12px',
+  fontSize: '13px',
   color: '#fff',
-  background: '#4D6BFE',
+  background: '#3a3f4b',
 }
-const BTN_DANGER_STYLE: CSSProperties = { ...BTN_STYLE, background: '#E54D4D' }
-const STATUS_STYLE: CSSProperties = {
-  marginTop: '8px',
-  fontSize: '11px',
-  color: '#9BA1B0',
+
+const BTN_DANGER: CSSProperties = { ...BTN, background: '#E54D4D' }
+
+const TOAST: CSSProperties = {
+  position: 'fixed',
+  right: '18px',
+  bottom: '84px',
+  zIndex: 2147483002,
+  background: '#1B1E27',
+  color: '#F2F3F5',
+  border: '1px solid rgba(255,255,255,.1)',
+  borderRadius: '10px',
+  padding: '8px 12px',
+  fontSize: '12px',
+  maxWidth: '70vw',
+  boxShadow: '0 6px 20px rgba(0,0,0,.4)',
   wordBreak: 'break-all',
-  maxHeight: '80px',
-  overflow: 'auto',
+  whiteSpace: 'pre-wrap',
 }
 
-interface FloatingState {
-  busyCreate: boolean
-  busyShutdown: boolean
-  status: string
+// ---- components -----------------------------------------------------------
+
+function PowerGlyph() {
+  return createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' },
+    createElement('path', { d: 'M12 2v10' }),
+    createElement('path', { d: 'M18.4 6.6a9 9 0 1 1-12.8 0' }),
+  )
 }
 
-function FloatingPanel() {
-  const [state, setState] = useState<FloatingState>({ busyCreate: false, busyShutdown: false, status: '' })
-  const bump = (patch: Partial<FloatingState>): void => setState(prev => ({ ...prev, ...patch }))
+function IconGlyph() {
+  return createElement('svg', { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' },
+    createElement('rect', { x: '2', y: '3', width: '20', height: '13', rx: '2' }),
+    createElement('path', { d: 'M8 21h8M12 16v5' }),
+  )
+}
+
+function FloatingControl() {
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [phase, setPhase] = useState<'idle' | 'sent'>('idle')
+  const [error, setError] = useState('')
+  const [toast, setToast] = useState<{ kind: 'ok' | 'warn' | 'err'; text: string } | null>(null)
+
+  const flash = (kind: 'ok' | 'warn' | 'err', text: string): void => {
+    setToast({ kind, text })
+    setTimeout(() => setToast(null), 7000)
+  }
 
   const onCreate = async (): Promise<void> => {
-    if (state.busyCreate) return
-    bump({ busyCreate: true, status: '' })
     try {
       const result = await apiCreate()
-      const parts = [result.ok ? T.ok : T.errCreate]
+      const parts = [result.ok ? T.toastOk : T.errCreate]
       if (result.path !== undefined) parts.push(result.path)
-      if (result.warning !== undefined) parts.push(`\n⚠ ${result.warning}`)
-      bump({ busyCreate: false, status: parts.join('\n') })
-    } catch (error) {
-      bump({ busyCreate: false, status: T.errCreate + (error instanceof Error ? error.message : String(error)) })
+      if (result.warning !== undefined) parts.push(`\n${T.toastWarn}${result.warning}`)
+      flash(result.ok ? 'ok' : 'warn', parts.join('\n'))
+    } catch (err) {
+      flash('err', T.errCreate + (err instanceof Error ? err.message : String(err)))
     }
   }
 
-  const onShutdown = async (): Promise<void> => {
-    if (state.busyShutdown) return
-    if (!window.confirm(T.confirmShutdown)) return
-    bump({ busyShutdown: true, status: '' })
+  const onConfirmStop = async (): Promise<void> => {
+    if (busy) return
+    setBusy(true)
+    setError('')
     try {
       await apiShutdown()
-      bump({ busyShutdown: false })
-      setTimeout(closeCurrentPage, 400)
-    } catch (error) {
-      bump({ busyShutdown: false, status: T.errShutdown + (error instanceof Error ? error.message : String(error)) })
+      setPhase('sent')
+      setTimeout(closeCurrentPage, 500)
+    } catch (err) {
+      setBusy(false)
+      setPhase('idle')
+      setError(T.errShutdown + (err instanceof Error ? err.message : String(err)))
     }
   }
 
-  return createElement('div', { style: PANEL_STYLE },
-    createElement('div', { style: { fontWeight: 600 } }, T.title),
-    createElement('div', { style: ROW_STYLE },
+  return createElement('div', null,
+    toast === null
+      ? null
+      : createElement('div', {
+        style: toast.kind === 'err' || toast.kind === 'warn' ? { ...TOAST, borderColor: '#E54D4D66' } : TOAST,
+      }, toast.text),
+
+    createElement('div', { style: { position: 'fixed', right: '18px', bottom: '18px', zIndex: 2147483000, display: 'flex', gap: '10px' } },
       createElement('button', {
-        style: BTN_STYLE,
+        style: { ...ROUND_BTN, background: '#4D6BFE' },
+        title: T.iconTitle,
+        'aria-label': T.iconTitle,
         onClick: () => { void onCreate() },
-        disabled: state.busyCreate,
-      }, state.busyCreate ? T.creating : T.create),
+      }, createElement(IconGlyph)),
       createElement('button', {
-        style: BTN_DANGER_STYLE,
-        onClick: () => { void onShutdown() },
-        disabled: state.busyShutdown,
-      }, state.busyShutdown ? T.stopping : T.shutdown),
+        style: { ...ROUND_BTN, background: '#E54D4D' },
+        title: T.powerTitle,
+        'aria-label': T.powerTitle,
+        onClick: () => { setConfirmOpen(true) },
+      }, createElement(PowerGlyph)),
     ),
-    state.status !== '' ? createElement('pre', { style: STATUS_STYLE }, state.status) : null,
+
+    !confirmOpen
+      ? null
+      : createElement('div', {
+        style: OVERLAY,
+        onClick: () => { if (!busy) setConfirmOpen(false) },
+      },
+        createElement('div', {
+          style: DIALOG,
+          onClick: (e: { stopPropagation(): void }) => { e.stopPropagation() },
+        },
+          createElement('div', { style: { fontWeight: 600, fontSize: '15px' } }, T.confirmHead),
+          createElement('p', { style: { margin: '8px 0 0', color: '#9BA1B0', fontSize: '13px' } }, T.confirmBody),
+          error !== '' ? createElement('p', { style: { margin: '10px 0 0', color: '#E54D4D', fontSize: '12px' } }, error) : null,
+          phase === 'sent'
+            ? createElement('p', { style: { margin: '12px 0 0', color: '#7BC96F' } }, T.exitSent)
+            : null,
+          createElement('div', { style: DIALOG_ACTIONS },
+            createElement('button', { style: BTN, onClick: () => { if (!busy) setConfirmOpen(false) }, disabled: busy }, T.cancel),
+            createElement('button', {
+              style: BTN_DANGER,
+              onClick: () => { void onConfirmStop() },
+              disabled: busy,
+            }, busy ? T.stopping : T.stop),
+          ),
+        ),
+      ),
   )
 }
 
@@ -189,7 +279,7 @@ export function apply(_ctx: unknown): void {
   host.dataset.dshQuickLauncher = 'true'
   document.body.appendChild(host)
   const root: Root = createRoot(host)
-  root.render(createElement(FloatingPanel))
+  root.render(createElement(FloatingControl))
 }
 
 export default { name, inject, apply }
