@@ -1,0 +1,9 @@
+# desktop-quick-launcher bundle patch: inserts the plugin row into the web
+# profile roster. Applied as a profile bundle layer via the
+# `dsh.bundle.patch` manifest field. Local debug:
+#   dsh --profile web --patch ./cordis.patch.yml
+# (the package must already be installed/linked into the profile's
+# node_modules, e.g. `dsh plugin --profile web add link:<abs path>`).
+- insert:
+    - id: desktop-quick-launcher
+      name: 'desktop-quick-launcher'
