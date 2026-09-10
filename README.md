@@ -59,9 +59,10 @@ other plugin pages):
 
 - **Floating buttons** — three independent switches for the details, stop, and restart
   buttons. Hide one, two, or all three (hiding all three removes the floating panel
-  entirely). The flags are ordinary plugin settings in the `desktop-quick-launcher`
-  namespace, so they persist in the profile settings file and can equally be edited from the
-  generic plugin-config editor.
+  entirely). The card reads them from `GET /status` and writes them through `POST /options`
+  (nonce-protected), which merges them into the `desktop-quick-launcher` settings namespace
+  — so they persist in the profile settings file and can equally be edited from the generic
+  plugin-config editor.
 - **Logs and status files** — the card lists `launcher.log`, `restart-helper.log`,
   `dsh-child.out.log`, `dsh-child.err.log`, `launcher-status.json`, `restart-status.json`
   and `restart-inflight.json` with size and modification time, and offers **View** (tail),
@@ -147,6 +148,7 @@ does **not** stop a local process, which can read `/ping` itself.
 | `/api/dsh-desktop_quick_launcher/logs` | GET | list the plugin's log/status files, or read one (`?name=&tail=`) |
 | `/api/dsh-desktop_quick_launcher/logs/clear` | POST | truncate logs / delete status files (`names` whitelist) |
 | `/api/dsh-desktop_quick_launcher/logs/open` | POST | reveal the log directory in the file manager |
+| `/api/dsh-desktop_quick_launcher/options` | POST | write the panel display switches (`showDetailsButton`, `showStopButton`, `showRestartButton`, `showLaunchReport`) |
 
 ### Settings
 
@@ -270,6 +272,15 @@ Fetch `GET /api/dsh-desktop_quick_launcher/ping` first and replay its `nonce` in
 - Do not double-click the icon repeatedly while a first boot is still running: the mutex
   makes the extra invocations *wait* instead of spawning a doomed second server, but they
   will still hold a console open until the first boot is ready.
+
+**"Double-clicking the desktop icon lands on `dsh web authentication required`"**
+
+The launcher used to open the bare origin (`http://127.0.0.1:3080`), which DSH answers with
+that page unless the browser already holds a session cookie. Since **v0.2.3** the launcher
+resolves a **token URL** — from `GET /ping` (the running host publishes its `authUrl`, also
+cached in `auth-url.txt`) or from the `dsh web: …?token=…` line it captured from the child it
+started — and opens that, so the page authenticates on the first load. Regenerate the desktop
+icon once after upgrading; an older `launcher.ps1` still opens the bare origin.
 
 **"The launcher shows no last-launch report"**
 

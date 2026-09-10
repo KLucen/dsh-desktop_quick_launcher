@@ -47,7 +47,25 @@ function harness(options = {}) {
   const spawns = []
   const exits = []
   const handoffWrites = []
+  const settingsWrites = []
   let sessions = options.sessions
+  // The user layer, and the plugin's settings hooks once installSection runs.
+  const userConfig = { ...(options.config ?? {}) }
+  const source = () => ({ ...BASE_CONFIG, ...userConfig })
+  let sectionHooks = null
+  // A stand-in for the host settings service: writing merges the user layer and
+  // fires the same onChange hook the real service fires, so /options really does
+  // change the config echo.
+  // `settings: null` means "no settings service at all"; omitted means the fake.
+  const settings = options.settings === null
+    ? undefined
+    : (options.settings ?? {
+      update: async (namespace, patch) => {
+        settingsWrites.push({ namespace, patch })
+        Object.assign(userConfig, patch)
+        sectionHooks?.onChange?.()
+      },
+    })
 
   const ctx = {
     webServer: {
@@ -60,12 +78,21 @@ function harness(options = {}) {
     systemPrompt: { section: () => () => {} },
     get(name) {
       if (name === 'sessions') return sessions
+      if (name === 'settings') return settings
       return undefined
     },
-    inject() { /* settings wiring is not needed for these tests */ },
+    inject(names, callback) {
+      if (names.includes('settings')) {
+        callback({
+          settings: {
+            installSection(owner, namespace, schema, entry, hooks) { sectionHooks = hooks; hooks.setSource(source) },
+          },
+        })
+      }
+    },
   }
 
-  apply(ctx, { ...BASE_CONFIG, ...(options.config ?? {}) }, {
+  apply(ctx, source(), {
     spawnSurvivor: options.spawnSurvivor ?? (async (helperPath) => {
       spawns.push(helperPath)
       const statusPath = join(home, 'desktop-quick-launcher', 'restart-status.json')
@@ -88,6 +115,7 @@ function harness(options = {}) {
     spawns,
     exits,
     handoffWrites,
+    settingsWrites,
     scriptsDir: join(home, 'desktop-quick-launcher'),
     setSessions(next) { sessions = next },
     nonce: options.nonce,
@@ -449,6 +477,57 @@ test('a helper that never starts cancels the restart and keeps the service alive
   assert.match(status.error, /未开始工作/)
   // The gate also releases the inflight marker so the user can retry at once.
   assert.equal(existsSync(join(app.scriptsDir, 'restart-inflight.json')), false)
+})
+
+test('the settings card writes its switches through /options', async () => {
+  const app = harness({ sessions: { list: () => [] } })
+  const ping = await app.call(LAUNCHER_API.ping)
+  const nonce = ping.json.nonce
+
+  // The nonce gate applies here like everywhere else.
+  const refused = await app.call(LAUNCHER_API.options, { method: 'POST', body: JSON.stringify({ showStopButton: false }) })
+  assert.equal(refused.status, 403)
+  assert.equal(refused.json.code, 'nonce-required')
+  assert.equal(app.settingsWrites.length, 0)
+
+  const written = await app.call(LAUNCHER_API.options, {
+    method: 'POST',
+    headers: { [NONCE_HEADER]: nonce },
+    body: JSON.stringify({ showStopButton: false }),
+  })
+  assert.equal(written.status, 200)
+  assert.deepEqual(app.settingsWrites, [{ namespace: 'desktop-quick-launcher', patch: { showStopButton: false } }])
+  // The answer carries the effective config so the card can update at once.
+  assert.equal(written.json.config.showStopButton, false)
+  assert.equal(written.json.config.showDetailsButton, true)
+
+  // Only boolean, known fields are accepted.
+  const cases = [
+    [{ nope: true }, 'unknown-option'],
+    [{ showStopButton: 'yes' }, 'invalid-value'],
+    [{}, 'empty-patch'],
+  ]
+  for (const [body, code] of cases) {
+    const res = await app.call(LAUNCHER_API.options, {
+      method: 'POST',
+      headers: { [NONCE_HEADER]: nonce },
+      body: JSON.stringify(body),
+    })
+    assert.equal(res.status, 400, `expected 400 for ${JSON.stringify(body)}`)
+    assert.equal(res.json.code, code)
+  }
+  assert.equal(app.settingsWrites.length, 1)
+
+  // Without a settings service the write is refused, not silently dropped.
+  const noSettings = harness({ sessions: { list: () => [] }, settings: null })
+  const ping2 = await noSettings.call(LAUNCHER_API.ping)
+  const unavailable = await noSettings.call(LAUNCHER_API.options, {
+    method: 'POST',
+    headers: { [NONCE_HEADER]: ping2.json.nonce },
+    body: JSON.stringify({ showStopButton: false }),
+  })
+  assert.equal(unavailable.status, 503)
+  assert.equal(unavailable.json.code, 'settings-unavailable')
 })
 
 test('an idle shutdown acknowledges then exits', async () => {

@@ -48,6 +48,7 @@ const API = {
   logs: '/api/dsh-desktop_quick_launcher/logs',
   logsClear: '/api/dsh-desktop_quick_launcher/logs/clear',
   logsOpen: '/api/dsh-desktop_quick_launcher/logs/open',
+  options: '/api/dsh-desktop_quick_launcher/options',
 } as const
 
 /** Settings namespace owned by the host half. */
@@ -154,6 +155,7 @@ const T = {
     settingFailed: '保存设置失败：',
     logReadFailed: '读取日志失败：',
     logClearFailed: '清空失败：',
+    cardOffline: '无法连接插件宿主（/status 无响应），开关状态暂不可用。',
     notWritable: '当前连接不允许写入设置（可能是远程访问的内存模式）。',
   },
   en: {
@@ -228,6 +230,7 @@ const T = {
     settingFailed: 'Could not save the setting: ',
     logReadFailed: 'Could not read the log: ',
     logClearFailed: 'Could not clear: ',
+    cardOffline: 'Cannot reach the plugin host (/status did not answer), so the switches are unavailable.',
     notWritable: 'This connection does not allow settings writes (a remote browser may be in memory mode).',
   },
 }[lang()]
@@ -829,26 +832,26 @@ function FloatingPanel() {
     banner === null ? null : createElement('div', { style: BANNER },
       createElement('div', null, banner),
       createElement('div', { style: { marginTop: '8px', display: 'flex', gap: '8px' } },
-        createElement('button', { style: BTN, onClick: () => { setBanner(null); setDetailsOpen(true) } }, T.details),
-        createElement('button', { style: BTN, onClick: () => { setBanner(null) } }, T.dismiss),
+        createElement('button', { type: 'button', style: BTN, onClick: () => { setBanner(null); setDetailsOpen(true) } }, T.details),
+        createElement('button', { type: 'button', style: BTN, onClick: () => { setBanner(null) } }, T.dismiss),
       ),
     ),
 
     (showDetails || showStop || showRestart) ? createElement('div', { style: { position: 'fixed', right: '18px', bottom: '18px', zIndex: 2147483000, display: 'flex', gap: '10px' } },
-      !showDetails ? null : createElement('button', {
+      !showDetails ? null : createElement('button', { type: 'button',
         style: { ...ROUND_BTN, background: '#4D6BFE' },
         title: T.iconTitle,
         'aria-label': T.iconTitle,
         onClick: () => { setDetailsOpen(open => !open); void refresh() },
       }, createElement(IconGlyph)),
-      !showStop ? null : createElement('button', {
+      !showStop ? null : createElement('button', { type: 'button',
         style: { ...ROUND_BTN, background: generating ? '#3a3f4b' : '#E54D4D', opacity: generating ? 0.6 : 1, cursor: generating ? 'not-allowed' : 'pointer' },
         title: generating ? `${T.busyBlocked} — ${T.busyHint}` : T.powerTitle,
         'aria-label': T.powerTitle,
         disabled: generating,
         onClick: () => { if (!generating) requestOperation(false) },
       }, createElement(PowerGlyph)),
-      !showRestart ? null : createElement('button', {
+      !showRestart ? null : createElement('button', { type: 'button',
         style: { ...ROUND_BTN, background: generating ? '#3a3f4b' : '#2F7D5B', opacity: generating ? 0.6 : 1, cursor: generating ? 'not-allowed' : 'pointer' },
         title: generating ? `${T.busyBlocked} — ${T.busyHint}` : T.restartTitle,
         'aria-label': T.restartTitle,
@@ -862,8 +865,8 @@ function FloatingPanel() {
       createElement('div', { style: { ...MUTED, marginTop: '4px' } }, T.busyHint),
       createElement('div', { style: { marginTop: '8px' } },
         phase === 'queued'
-          ? createElement('button', { style: BTN, onClick: () => { setPhase('idle'); setNote('') } }, T.cancelQueue)
-          : createElement('button', { style: BTN_PRIMARY, onClick: () => { setPhase('queued'); setNote(T.restartQueued) } }, T.restartQueued),
+          ? createElement('button', { type: 'button', style: BTN, onClick: () => { setPhase('idle'); setNote('') } }, T.cancelQueue)
+          : createElement('button', { type: 'button', style: BTN_PRIMARY, onClick: () => { setPhase('queued'); setNote(T.restartQueued) } }, T.restartQueued),
       ),
     ) : null,
 
@@ -874,7 +877,7 @@ function FloatingPanel() {
     detailsOpen ? createElement('div', { style: PANEL },
       createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
         createElement('div', { style: { fontWeight: 600, fontSize: '13px' } }, T.panelTitle),
-        createElement('button', { style: BTN, onClick: () => { setDetailsOpen(false) } }, T.close),
+        createElement('button', { type: 'button', style: BTN, onClick: () => { setDetailsOpen(false) } }, T.close),
       ),
       status === null
         ? createElement('div', { style: MUTED }, T.noData)
@@ -917,8 +920,8 @@ function FloatingPanel() {
             : dialog === 'restart' ? T.confirmRestartBody
               : T.confirmForceBody),
         createElement('div', { style: DIALOG_ACTIONS },
-          createElement('button', { style: BTN, onClick: () => { setDialog(null) }, disabled: working }, T.cancel),
-          createElement('button', {
+          createElement('button', { type: 'button', style: BTN, onClick: () => { setDialog(null) }, disabled: working }, T.cancel),
+          createElement('button', { type: 'button',
             style: dialog === 'stop' || dialog === 'restart' ? BTN_PRIMARY : BTN_DANGER,
             onClick: () => { void onConfirm() },
             disabled: working,
@@ -953,41 +956,57 @@ function formatBytes(size: number): string {
 /**
  * The settings card: which floating buttons are shown, plus log management.
  *
- * Reads and writes go through the host: the flags live in the plugin's settings
- * namespace (bound here with `ctx.settingsScope`, so a write persists exactly
- * like the generic plugin-config editor would), and the log routes are this
- * plugin's own loopback endpoints with a server-side name whitelist.
+ * Reads and writes go through the host: the flags are ordinary plugin settings
+ * in the `desktop-quick-launcher` namespace, read from `/status` and written
+ * through `/options`. Deliberately independent of the client settings
+ * transport — one fewer SDK surface to get wrong — and every failure surfaces
+ * in the card instead of being swallowed.
  */
-function LauncherSettingsSection(props: { scope: SettingsScopeLike }) {
-  const { scope } = props
-  const [section, setSection] = useState<Record<string, unknown>>(() => scope.getSnapshot().value ?? {})
-  const [writable, setWritable] = useState(() => scope.getSnapshot().writable !== false)
+function LauncherSettingsSection() {
+  const [section, setSection] = useState<Record<string, unknown>>({})
   const [note, setNote] = useState('')
+  const [diagnostic, setDiagnostic] = useState('')
   const [files, setFiles] = useState<LogFileInfo[]>([])
   const [dir, setDir] = useState('')
   const [viewing, setViewing] = useState<{ name: string; text: string; size: number } | null>(null)
   const [working, setWorking] = useState(false)
 
-  useEffect(() => {
-    const sync = (): void => {
-      const snapshot = scope.getSnapshot()
-      setSection(snapshot.value ?? {})
-      setWritable(snapshot.writable !== false)
+  const loadOptions = useCallback(async (): Promise<void> => {
+    const status = await getJson(API.status)
+    if (status === null) {
+      setDiagnostic(T.cardOffline)
+      return
     }
-    sync()
-    return scope.subscribe(sync)
-  }, [scope])
+    setDiagnostic('')
+    setSection((status.config ?? {}) as unknown as Record<string, unknown>)
+  }, [])
 
   const refreshLogs = useCallback(async (): Promise<void> => {
     try {
-      const response = await fetch(API.logs, { cache: 'no-store' })
+      const response = await fetch(API.logs, { cache: 'no-store', credentials: 'same-origin' })
+      if (!response.ok) {
+        setNote(`${T.logReadFailed}HTTP ${response.status}`)
+        return
+      }
       const body = await response.json() as { files?: LogFileInfo[]; dir?: string }
       setFiles(Array.isArray(body.files) ? body.files : [])
       setDir(typeof body.dir === 'string' ? body.dir : '')
-    } catch { /* keep the previous list */ }
+      setNote('')
+    } catch (error) {
+      setNote(T.logReadFailed + (error instanceof Error ? error.message : String(error)))
+    }
   }, [])
 
-  useEffect(() => { void refreshLogs() }, [refreshLogs])
+  useEffect(() => {
+    void loadOptions()
+    void refreshLogs()
+  }, [loadOptions, refreshLogs])
+
+  // Keep the switches honest even if the floating panel changes them too.
+  useEffect(() => {
+    const id = window.setInterval(() => { void loadOptions() }, 3000)
+    return () => { window.clearInterval(id) }
+  }, [loadOptions])
 
   const freshNonce = useCallback(async (): Promise<string | null> => {
     const next = await getJson(API.ping)
@@ -999,10 +1018,22 @@ function LauncherSettingsSection(props: { scope: SettingsScopeLike }) {
     setWorking(true)
     setSection(previous => ({ ...previous, [field]: value }))
     try {
-      await scope.set(field, value)
+      const header = await freshNonce()
+      if (header === null) {
+        setNote(T.noNonce)
+        await loadOptions()
+        return
+      }
+      const result = await postJson(API.options, { [field]: value }, header)
+      if (result.status < 200 || result.status >= 300) {
+        setNote(T.settingFailed + String(result.body.error ?? `HTTP ${result.status}`))
+        await loadOptions()
+        return
+      }
+      setSection((result.body.config ?? {}) as unknown as Record<string, unknown>)
     } catch (error) {
       setNote(T.settingFailed + (error instanceof Error ? error.message : String(error)))
-      setSection(scope.getSnapshot().value ?? {})
+      await loadOptions()
     } finally {
       setWorking(false)
     }
@@ -1055,7 +1086,7 @@ function LauncherSettingsSection(props: { scope: SettingsScopeLike }) {
 
   const flag = (field: string, fallback: boolean): boolean =>
     typeof section[field] === 'boolean' ? section[field] as boolean : fallback
-  const disabled = working || !writable
+  const disabled = working
 
   const toggle = (field: string, label: string, fallback: boolean) => createElement('label', { style: CHECK_ROW, key: field },
     createElement('input', {
@@ -1077,9 +1108,9 @@ function LauncherSettingsSection(props: { scope: SettingsScopeLike }) {
     createElement('div', { style: SECTION_TITLE }, T.logsTitle),
     createElement('div', { style: MUTED }, T.logsHint),
     createElement('div', { style: { marginTop: '6px', display: 'flex', gap: '8px' } },
-      createElement('button', { style: SMALL_BTN, onClick: () => { void refreshLogs() } }, T.refresh),
-      createElement('button', { style: SMALL_BTN, onClick: () => { void openDir() } }, T.openDir),
-      createElement('button', { style: SMALL_BTN, disabled: working, onClick: () => { void clearLogs([]) } }, T.clearAll),
+      createElement('button', { type: 'button', style: SMALL_BTN, onClick: () => { void refreshLogs() } }, T.refresh),
+      createElement('button', { type: 'button', style: SMALL_BTN, onClick: () => { void openDir() } }, T.openDir),
+      createElement('button', { type: 'button', style: SMALL_BTN, disabled: working, onClick: () => { void clearLogs([]) } }, T.clearAll),
     ),
     createElement('div', { style: { marginTop: '6px' } },
       files.length === 0
@@ -1089,8 +1120,8 @@ function LauncherSettingsSection(props: { scope: SettingsScopeLike }) {
           createElement('span', { style: { ...MUTED, minWidth: '72px' } }, file.exists ? formatBytes(file.size) : T.missing),
           createElement('span', { style: { ...MUTED, flex: 1, fontSize: '11px' } },
             file.exists && file.mtime !== null ? new Date(file.mtime).toLocaleString() : ''),
-          createElement('button', { style: SMALL_BTN, disabled: !file.exists, onClick: () => { void viewLog(file.name) } }, T.view),
-          createElement('button', { style: SMALL_BTN, disabled: !file.exists || working, onClick: () => { void clearLogs([file.name]) } }, T.clear),
+          createElement('button', { type: 'button', style: SMALL_BTN, disabled: !file.exists, onClick: () => { void viewLog(file.name) } }, T.view),
+          createElement('button', { type: 'button', style: SMALL_BTN, disabled: !file.exists || working, onClick: () => { void clearLogs([file.name]) } }, T.clear),
         )),
     ),
     dir === '' ? null : createElement('pre', { style: MONO }, dir),
@@ -1098,7 +1129,7 @@ function LauncherSettingsSection(props: { scope: SettingsScopeLike }) {
     viewing === null ? null : createElement('div', { style: { marginTop: '10px' } },
       createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
         createElement('span', { style: { fontWeight: 600 } }, `${T.tailOf} ${viewing.name} (${formatBytes(viewing.size)})`),
-        createElement('button', { style: SMALL_BTN, onClick: () => { setViewing(null) } }, T.close),
+        createElement('button', { type: 'button', style: SMALL_BTN, onClick: () => { setViewing(null) } }, T.close),
       ),
       createElement('pre', {
         style: { ...MONO, maxHeight: '260px', overflow: 'auto' },
@@ -1106,7 +1137,7 @@ function LauncherSettingsSection(props: { scope: SettingsScopeLike }) {
     ),
 
     note === '' ? null : createElement('div', { style: { marginTop: '8px', color: '#E58A8A' } }, note),
-    writable ? null : createElement('div', { style: { marginTop: '8px', color: '#E5C07B' } }, T.notWritable),
+    diagnostic === '' ? null : createElement('div', { style: { marginTop: '8px', color: '#E5C07B' } }, diagnostic),
   )
 }
 
@@ -1120,20 +1151,17 @@ function registerSettingsSection(ctx: unknown): void {
   const host = ctx as ClientContextLike
   const install = (scoped: ClientContextLike): void => {
     const slots = scoped.slots
-    const binder = scoped.settingsScope
     if (slots === undefined || typeof slots.register !== 'function') return
-    if (binder === undefined || typeof binder.bind !== 'function') return
-    const scope = binder.bind({ namespace: NAMESPACE })
     slots.inject('settings.section', () => slots.register({
       name: 'settings.section',
       id: NAMESPACE,
       order: SECTION_ORDER,
       label: () => (lang() === 'zh' ? 'DSH 启动器' : 'DSH launcher'),
-      inject: () => ({ scope }),
+      inject: () => ({}),
     }, LauncherSettingsSection))
   }
   try {
-    if (typeof host.inject === 'function') host.inject(['slots', 'settingsScope'], install)
+    if (typeof host.inject === 'function') host.inject(['slots'], install)
     else install(host)
   } catch { /* the floating panel matters more than the settings card */ }
 }

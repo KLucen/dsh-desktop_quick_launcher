@@ -566,5 +566,40 @@ curl.exe -s -X POST -H "x-dsh-ql-nonce: $nonce" -H 'content-type: application/js
 ### v0.2.1 验证
 
 - `pnpm typecheck` 通过；`pnpm test` **40/40**（新增 3 项：助手恢复 cwd/DSH_HOME 的断言、`renderScheduledTaskCommand` 的引号契约、**助手从未启动 ⇒ 500 + 不退出 + `phase=failed` + inflight 已清**）。
-- `schtasks` 路径经 `execFile` 实测：`/create`、`/run` 均成功，助手进程确实执行，任务已清理。
-- 仍未做：在 0.2.1 实例上再点一次 GUI 重启按钮做端到端确认（最坏情况已被启动门兜住）。
+- `schtasks` 路径经 `execFile` 实测：`/create`、`/run` 均成功，助手进程确实执行，任务已清理。- 仍未做：在 0.2.1 实例上再点一次 GUI 重启按钮做端到端确认（最坏情况已被启动门兜住）。
+
+---
+
+## 13. v0.2.3：桌面图标 401 与设置卡片点击无响应
+
+用户实测两条反馈（0.2.2 在线）：
+
+### 13.1 桌面快捷方式打开后显示 `dsh web authentication required`，手动刷新才进得去
+
+**根因**：启动器打开的是**裸 origin** `http://127.0.0.1:3080`。DSH 的 `GET /` 在没有会话 cookie 时返回 401 并提示重新打开控制台打印的带 token URL；`dsh web` 自己的自动打开走的是 `authenticatedUrl`（`dsh-web-app/lib/index.js:198`），我们没走这条路。
+
+**修复**（三源回退，`Resolve-OpenUrl`）：
+
+1. `/ping` 新增 `authUrl`：宿主通过 `ctx.inject(['connection'], …)` 调 `connection.authenticatedUrl('http://127.0.0.1:<port>')`（与 dsh-web-app 同一 API），并顺手把结果写进 `<scriptsDir>/auth-url.txt`；
+2. 启动器从它启动的子进程 stdout 里解析 `^dsh web:\s*(\S+)`（v0.2 起本来就重定向了 stdout）；
+3. 再退回 `auth-url.txt`，最后才用裸 `$url`。
+
+`Open-Browser` 改为接收目标 URL 参数，三处调用点统一为 `Open-Browser (Resolve-OpenUrl $probe)`。**升级后必须重新生成一次桌面图标**（旧脚本仍开裸 origin）。
+
+### 13.2 设置卡片：刷新 / 打开目录 / 全部清空 点击无响应，三个开关要刷新页面才"加载"
+
+**服务端已排除**：三个日志路由用 curl 全部 200（`/logs`、`/logs?name=…&tail=`、`/logs/clear`、`/logs/open`），`/status.config` 也正确回显开关。
+
+**两个客户端原因**：
+
+1. **按钮没有 `type`**：设置面板可能把内容包在 `<form>` 里，未声明 `type` 的 `<button>` 默认是 `submit`，点击会被表单提交吞掉（悬浮面板不在表单里，所以它的按钮一直是好的）。修复：**全部 16 个按钮显式 `type: 'button'`**。
+2. **状态来源依赖客户端设置传输**：原实现用 `ctx.settingsScope.bind(...)` 读写，卡片依赖 mirror 的订阅时机（首帧可能是 `loading`），且失败路径被 `catch {}` 吞掉。修复：**解耦** —— 开关从 `GET /status.config` 读（3 秒轮询），写入走插件自己的 `POST /options`（nonce + 只接受 4 个布尔字段的 allowlist，宿主用 `ctx.settings.update(NAMESPACE, patch)` 落到自己的命名空间）。所有失败（含"刷新"）都在卡片里以红字显示，不再静默。
+
+### v0.2.3 验证
+
+- `pnpm typecheck` 通过；`pnpm test` **46/46**（新增 2 项：启动器 `Resolve-OpenUrl`/`auth-url.txt`/`Open-Browser` 传参的断言；`/options` 的 nonce 门、allowlist、类型校验、成功路径回显**真的跟着变**、无 settings 服务时 503）。
+- 测试 harness 升级为**真实调用 `installSection` 并触发 `setSource`/`onChange`**，因此 `/options` 的配置回显是端到端验证过的，不是只看调用记录。
+
+### 一个过程事故（值得记住）
+
+用 PowerShell 的 `Get-Content -Raw` + `Set-Content -Encoding utf8` 给 `client.ts` 批量加 `type="button"`，把整个文件的中文按 ANSI/GBK 解码后写回 —— i18n 全表变成乱码、乱码吞掉引号导致语法错误，只能 `git checkout` 恢复到 0.2.2 再重做。**含非 ASCII 的源码一律用文件工具编辑**（已记入长期记忆）。

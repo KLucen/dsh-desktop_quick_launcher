@@ -137,7 +137,12 @@ export const LAUNCHER_API = {
   logsClear: `${PLUGIN_ROUTE_PREFIX}/logs/clear`,
   /** Reveal the log directory in the file manager. */
   logsOpen: `${PLUGIN_ROUTE_PREFIX}/logs/open`,
+  /** Read or write the panel's own display options. */
+  options: `${PLUGIN_ROUTE_PREFIX}/options`,
 } as const
+
+/** Config fields the settings card may write. */
+export const OPTION_FIELDS = ['showDetailsButton', 'showStopButton', 'showRestartButton', 'showLaunchReport'] as const
 
 /** Largest log payload returned by one /logs?name= read. */
 const MAX_LOG_CHARS = 200_000
@@ -146,7 +151,7 @@ const MAX_LOG_CHARS = 200_000
 export const NONCE_HEADER = 'x-dsh-ql-nonce'
 
 /** Plugin version, mirrored from package.json by hand. */
-export const PLUGIN_VERSION = '0.2.2'
+export const PLUGIN_VERSION = '0.2.3'
 
 /** How long a restart handover marker blocks a second restart. */
 const INFLIGHT_TTL_MS = 90_000
@@ -559,6 +564,38 @@ export function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void {
 
   const scriptsDir = (): string => join(dshHome(), 'desktop-quick-launcher')
   const pathIn = (file: string): string => join(scriptsDir(), file)
+
+  /**
+   * Token URL of this instance, as `dsh web` prints it. Resolved from the
+   * connection service so the launcher can open an already-authenticated page
+   * instead of the bare origin — which answers 401 on a fresh browser profile.
+   */
+  let authUrl: string | null = null
+  let authUrlWritten: string | null = null
+  /** Persist the token URL so a launcher/helper can open an authenticated page. */
+  const rememberAuthUrl = (): void => {
+    if (authUrl === null || authUrl === authUrlWritten) return
+    const value = authUrl
+    authUrlWritten = value
+    void (async () => {
+      try {
+        await mkdir(scriptsDir(), { recursive: true })
+        await writeFile(pathIn(LAUNCHER_FILES.authUrl), value, 'utf8')
+      } catch { /* best effort: the launcher falls back to the bare origin */ }
+    })()
+  }
+  ctx.inject(['connection'], (connectionCtx) => {
+    const connection = (connectionCtx as {
+      connection?: { authenticatedUrl?: (url: string) => string }
+    }).connection
+    if (connection === undefined || typeof connection.authenticatedUrl !== 'function') return
+    try {
+      authUrl = connection.authenticatedUrl(`http://127.0.0.1:${resolvedPort()}`)
+    } catch {
+      authUrl = null
+    }
+    rememberAuthUrl()
+  })
   const launcherStatusPath = (): string => pathIn(LAUNCHER_FILES.launcherStatus)
   const restartStatusPath = (): string => pathIn(LAUNCHER_FILES.restartStatus)
   const inflightPath = (): string => pathIn(LAUNCHER_FILES.restartInflight)
@@ -825,7 +862,26 @@ export function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void {
     host: '127.0.0.1',
     startedAt: new Date(startedAt).toISOString(),
     uptimeMs: Date.now() - startedAt,
+    authUrl,
   })
+
+  /** Config echo shared by /status and /options. */
+  const configEcho = (): Record<string, unknown> => {
+    const value = current()
+    return {
+      dshCommand: value.dshCommand ?? DEFAULT_DSH_COMMAND,
+      url: value.url ?? DEFAULT_URL,
+      profile: value.profile ?? '',
+      confirmShutdown: value.confirmShutdown ?? true,
+      busyPolicy: value.busyPolicy ?? 'block',
+      restartMethod: value.restartMethod ?? 'auto',
+      showDetailsButton: value.showDetailsButton ?? true,
+      showStopButton: value.showStopButton ?? true,
+      showRestartButton: value.showRestartButton ?? true,
+      showLaunchReport: value.showLaunchReport ?? true,
+      helperStartTimeoutMs: value.helperStartTimeoutMs ?? DEFAULT_HELPER_START_TIMEOUT_MS,
+    }
+  }
 
   const sync = (): void => {
     if (disposeSection !== undefined) {
@@ -849,6 +905,7 @@ export function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void {
           writeJson(res, 403, { ok: false, code: 'forbidden', error: 'forbidden: loopback-only' })
           return
         }
+        rememberAuthUrl()
         writeJson(res, 200, instanceInfo())
       },
     }
@@ -875,19 +932,7 @@ export function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void {
         writeJson(res, 200, {
           ...instanceInfo(),
           busy: busySnapshot(now),
-          config: {
-            dshCommand: value.dshCommand ?? DEFAULT_DSH_COMMAND,
-            url: value.url ?? DEFAULT_URL,
-            profile: value.profile ?? '',
-            confirmShutdown: value.confirmShutdown ?? true,
-            busyPolicy: value.busyPolicy ?? 'block',
-            restartMethod: value.restartMethod ?? 'auto',
-            showDetailsButton: value.showDetailsButton ?? true,
-            showStopButton: value.showStopButton ?? true,
-            showRestartButton: value.showRestartButton ?? true,
-            helperStartTimeoutMs: value.helperStartTimeoutMs ?? DEFAULT_HELPER_START_TIMEOUT_MS,
-            showLaunchReport: value.showLaunchReport ?? true,
-          },
+          config: configEcho(),
           port: {
             listening: true,
             ownerPid: process.pid,
@@ -993,6 +1038,51 @@ export function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void {
           writeJson(res, 200, { ok: true, dir })
         } catch (error) {
           writeJson(res, 500, { ok: false, code: 'open-failed', error: error instanceof Error ? error.message : String(error), dir })
+        }
+      },
+    }
+
+    const optionsRoute: WebRoute = {
+      kind: 'exact',
+      path: LAUNCHER_API.options,
+      handler: async (req, res) => {
+        if (!guardPost(req, res)) return
+        const body = await readJsonBody(req)
+        const patch: Record<string, boolean> = {}
+        for (const [key, value] of Object.entries(body)) {
+          if (!(OPTION_FIELDS as readonly string[]).includes(key)) {
+            writeJson(res, 400, { ok: false, code: 'unknown-option', error: `unknown option: ${key}` })
+            return
+          }
+          if (typeof value !== 'boolean') {
+            writeJson(res, 400, { ok: false, code: 'invalid-value', error: `${key} must be a boolean` })
+            return
+          }
+          patch[key] = value
+        }
+        if (Object.keys(patch).length === 0) {
+          writeJson(res, 400, { ok: false, code: 'empty-patch', error: 'no options given' })
+          return
+        }
+        // The settings card writes through the host so the value lands in the
+        // plugin's own namespace (same place the generic editor would put it)
+        // instead of a browser-local copy.
+        const settings = ctx.get('settings') as {
+          update?: (ns: string, patch: object) => Promise<void>
+        } | undefined
+        if (settings === undefined || typeof settings.update !== 'function') {
+          writeJson(res, 503, { ok: false, code: 'settings-unavailable', error: 'the settings service is not available' })
+          return
+        }
+        try {
+          await settings.update(NAMESPACE, patch)
+          writeJson(res, 200, { ok: true, applied: patch, config: configEcho() })
+        } catch (error) {
+          writeJson(res, 500, {
+            ok: false,
+            code: 'write-failed',
+            error: error instanceof Error ? error.message : String(error),
+          })
         }
       },
     }
@@ -1139,6 +1229,7 @@ export function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void {
     disposers.push(ctx.webServer.register(logsRoute))
     disposers.push(ctx.webServer.register(logsClearRoute))
     disposers.push(ctx.webServer.register(logsOpenRoute))
+    disposers.push(ctx.webServer.register(optionsRoute))
     disposers.push(ctx.webServer.register(createRoute))
     disposers.push(ctx.webServer.register(restartRoute))
     disposers.push(ctx.webServer.register(shutdownRoute))

@@ -38,7 +38,7 @@
 
 插件在**设置**里贡献了自己的一页（`settings.section` 槽位，和其它插件页并列）：
 
-- **悬浮按钮** —— 「详情」「停止」「重启」三个按钮各有独立开关：可以只留其中一部分，也可以全部隐藏（三个都关掉后右下角不再出现任何按钮）。这些开关就是 `desktop-quick-launcher` 命名空间里的普通插件设置，会持久化进 profile 的设置文件，也同样可以在通用的「插件配置」编辑器里改。
+- **悬浮按钮** —— 「详情」「停止」「重启」三个按钮各有独立开关：可以只留其中一部分，也可以全部隐藏（三个都关掉后右下角不再出现任何按钮）。卡片从 `GET /status` 读、通过 `POST /options`（带 nonce）写，写入会合并进 `desktop-quick-launcher` 命名空间，因此会持久化进 profile 的设置文件，也同样可以在通用的「插件配置」编辑器里改。
 - **日志与状态文件** —— 卡片会列出 `launcher.log`、`restart-helper.log`、`dsh-child.out.log`、`dsh-child.err.log`、`launcher-status.json`、`restart-status.json`、`restart-inflight.json` 的大小与修改时间，并提供**查看**（末尾内容）、**清空**（单个或全部）、**刷新**、**打开目录**。状态文件是**删除**而不是清空，这样面板会显示"暂无记录"而不是解析错误。这些路由只接受白名单里的名字（绝不接受调用方传入的路径），写操作需要 nonce。
 
 ### 安全重启
@@ -78,6 +78,7 @@
 | `/api/dsh-desktop_quick_launcher/logs` | GET | 列出本插件的日志/状态文件，或读其中一个（`?name=&tail=`） |
 | `/api/dsh-desktop_quick_launcher/logs/clear` | POST | 清空日志 / 删除状态文件（`names` 走白名单） |
 | `/api/dsh-desktop_quick_launcher/logs/open` | POST | 在文件管理器里打开日志目录 |
+| `/api/dsh-desktop_quick_launcher/options` | POST | 写入面板开关（`showDetailsButton`、`showStopButton`、`showRestartButton`、`showLaunchReport`） |
 
 ### 设置项
 
@@ -165,6 +166,10 @@ dsh --profile web --patch D:\path\to\dsh-desktop_quick_launcher\cordis.patch.yml
 - `phase: "up-unknown"` 表示端口被别人占了，占用者的 PID 与进程名就在报告里。释放它，或把 `url` 指到别的端口。
 - `phase: "child-exit"` 会带上子进程 stderr 的末尾 15 行，通常这就是全部答案。
 - 不要在首次启动还没完成时反复双击图标：互斥量会让多出来的调用**转为等待**而不是去起一个注定失败的实例，但它们仍会占着一个控制台直到首次启动就绪。
+
+**"双击桌面图标后页面显示 `dsh web authentication required`"**
+
+启动器以前打开的是**裸 origin**（`http://127.0.0.1:3080`），浏览器没有会话 cookie 时 DSH 就会回这一页。**v0.2.3 起**启动器会解析出**带 token 的 URL** —— 优先取 `GET /ping` 里宿主公布的 `authUrl`（同时缓存在 `auth-url.txt`），其次取它自己启动子进程时捕获到的 `dsh web: …?token=…` 一行 —— 并打开它，因此首次加载就是已认证状态。升级后请重新生成一次桌面图标；旧的 `launcher.ps1` 仍会打开裸 origin。
 
 **"启动器里看不到上次启动报告"**
 

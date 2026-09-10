@@ -124,6 +124,16 @@ test('restart helper shares the probe and captures child output', () => {
   assert.match(HELPER, /Get-ChildTail 15/)
 })
 
+test('the launcher opens an authenticated URL, not the bare origin', () => {
+  // The bare origin answers 401 on a fresh browser profile — exactly the
+  // "dsh web authentication required" page seen after a shortcut launch.
+  assert.match(LAUNCHER, /function Resolve-OpenUrl/)
+  assert.match(LAUNCHER, /Open-Browser \(Resolve-OpenUrl \$probe\)/)
+  assert.match(LAUNCHER, /\$authMatch = \[regex\]::Match\(\$ping\.body/)
+  assert.match(LAUNCHER, /auth-url\.txt/)
+  assert.match(LAUNCHER, /param\(\[string\]\$Target\)/)
+})
+
 test('restart helper restores the working directory and DSH_HOME', () => {
   // A scheduled task starts in %SystemRoot%\System32 with no DSH_HOME; both have
   // to be restored or the replacement comes up in the wrong workspace.

@@ -329,11 +329,15 @@ declare const LAUNCHER_API: {
   readonly logsClear: "/api/dsh-desktop_quick_launcher/logs/clear";
   /** Reveal the log directory in the file manager. */
   readonly logsOpen: "/api/dsh-desktop_quick_launcher/logs/open";
+  /** Read or write the panel's own display options. */
+  readonly options: "/api/dsh-desktop_quick_launcher/options";
 };
+/** Config fields the settings card may write. */
+declare const OPTION_FIELDS: readonly ["showDetailsButton", "showStopButton", "showRestartButton", "showLaunchReport"];
 /** Nonce header required by every state-changing route. */
 declare const NONCE_HEADER = "x-dsh-ql-nonce";
 /** Plugin version, mirrored from package.json by hand. */
-declare const PLUGIN_VERSION = "0.2.2";
+declare const PLUGIN_VERSION = "0.2.3";
 /** Result of a desktop-icon creation. */
 interface CreateResult {
   ok: true;
@@ -424,4 +428,4 @@ interface ApplyHooks {
  */
 declare function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void;
 //#endregion
-export { ApplyHooks, type BusySnapshot, type ChildInfo, Config, CreateResult, type KilledProcess, LAUNCHER_API, type LauncherPhase, type LauncherPlatform, type LauncherSpec, type LauncherStatus, type MutexInfo, NONCE_HEADER, type OpenTurn, PLUGIN_VERSION, type PortOwnerInfo, type ProbeClass, type ProbeInfo, type RestartPhase, type RestartSpec, type RestartStatus, type SessionEventLike, type SessionView, type StatusFile, apply, createDesktopShortcut, findOpenTurns, formatDuration, inject, isLauncherFailure, name, parseStatusFile, phaseSeverity, portFromUrl, renderLauncherScript, renderRestartHelper, renderScheduledTaskCommand, resolveLauncherSpec, stripBom, tailLines };
+export { ApplyHooks, type BusySnapshot, type ChildInfo, Config, CreateResult, type KilledProcess, LAUNCHER_API, type LauncherPhase, type LauncherPlatform, type LauncherSpec, type LauncherStatus, type MutexInfo, NONCE_HEADER, OPTION_FIELDS, type OpenTurn, PLUGIN_VERSION, type PortOwnerInfo, type ProbeClass, type ProbeInfo, type RestartPhase, type RestartSpec, type RestartStatus, type SessionEventLike, type SessionView, type StatusFile, apply, createDesktopShortcut, findOpenTurns, formatDuration, inject, isLauncherFailure, name, parseStatusFile, phaseSeverity, portFromUrl, renderLauncherScript, renderRestartHelper, renderScheduledTaskCommand, resolveLauncherSpec, stripBom, tailLines };

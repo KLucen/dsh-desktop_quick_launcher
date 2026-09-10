@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop_quick_launcher",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Desktop quick launcher for dsh web (independent rebuild of the retired @linxin666/dsh-desktop-launcher): a double-click desktop icon that starts dsh web and opens the Web GUI with tiered port probing and captured child output, a floating Web UI panel to create/refresh the icon, restart the service through a scheduled-task helper that is verified to be running before the host exits, and exit the host gracefully — refusing to cut off an answer that is still generating — plus a Settings card that chooses which floating buttons appear and manages the plugin's own logs.",
   "type": "module",
   "license": "Apache-2.0",
