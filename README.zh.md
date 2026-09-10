@@ -34,6 +34,13 @@
 - **停止**：确认后宿主刷完响应再优雅退出，页面自行关闭。
 - **重启**：移交给独立助手，新实例就绪后页面自动回到同一会话。
 
+### 设置卡片
+
+插件在**设置**里贡献了自己的一页（`settings.section` 槽位，和其它插件页并列）：
+
+- **悬浮按钮** —— 「详情」「停止」「重启」三个按钮各有独立开关：可以只留其中一部分，也可以全部隐藏（三个都关掉后右下角不再出现任何按钮）。这些开关就是 `desktop-quick-launcher` 命名空间里的普通插件设置，会持久化进 profile 的设置文件，也同样可以在通用的「插件配置」编辑器里改。
+- **日志与状态文件** —— 卡片会列出 `launcher.log`、`restart-helper.log`、`dsh-child.out.log`、`dsh-child.err.log`、`launcher-status.json`、`restart-status.json`、`restart-inflight.json` 的大小与修改时间，并提供**查看**（末尾内容）、**清空**（单个或全部）、**刷新**、**打开目录**。状态文件是**删除**而不是清空，这样面板会显示"暂无记录"而不是解析错误。这些路由只接受白名单里的名字（绝不接受调用方传入的路径），写操作需要 nonce。
+
 ### 安全重启
 
 重启值得单独一节：装插件、升核心、重打补丁都要重启 `dsh web`，而"朴素版本"的重启是破坏性的。
@@ -68,10 +75,13 @@
 | `/api/dsh-desktop_quick_launcher/create` | POST | 写启动脚本 + 桌面图标 |
 | `/api/dsh-desktop_quick_launcher/restart` | POST | 移交给独立助手后退出（`409 busy` / `409 restart-inflight`） |
 | `/api/dsh-desktop_quick_launcher/shutdown` | POST | 优雅退出（`409 busy`） |
+| `/api/dsh-desktop_quick_launcher/logs` | GET | 列出本插件的日志/状态文件，或读其中一个（`?name=&tail=`） |
+| `/api/dsh-desktop_quick_launcher/logs/clear` | POST | 清空日志 / 删除状态文件（`names` 走白名单） |
+| `/api/dsh-desktop_quick_launcher/logs/open` | POST | 在文件管理器里打开日志目录 |
 
 ### 设置项
 
-schemastery 配置段（`desktop-quick-launcher` 命名空间）：`enabled`、`announceToAgent`、`dshCommand`、`url`、`profile`、`iconPath`、`confirmShutdown`、`restartGraceMs`（1500）、`restartTimeoutSec`（150）、`busyPolicy`（`block` | `warn`）、`restartMethod`（`auto` | `schtasks` | `detached`）、`helperStartTimeoutMs`（8000）、`showLaunchReport`。
+schemastery 配置段（`desktop-quick-launcher` 命名空间）：`enabled`、`announceToAgent`、`dshCommand`、`url`、`profile`、`iconPath`、`confirmShutdown`、`restartGraceMs`（1500）、`restartTimeoutSec`（150）、`busyPolicy`（`block` | `warn`）、`restartMethod`（`auto` | `schtasks` | `detached`）、`helperStartTimeoutMs`（8000）、`showDetailsButton`、`showStopButton`、`showRestartButton`、`showLaunchReport`。
 
 ### 真正能被加载的客户端产物
 
@@ -155,6 +165,10 @@ dsh --profile web --patch D:\path\to\dsh-desktop_quick_launcher\cordis.patch.yml
 - `phase: "up-unknown"` 表示端口被别人占了，占用者的 PID 与进程名就在报告里。释放它，或把 `url` 指到别的端口。
 - `phase: "child-exit"` 会带上子进程 stderr 的末尾 15 行，通常这就是全部答案。
 - 不要在首次启动还没完成时反复双击图标：互斥量会让多出来的调用**转为等待**而不是去起一个注定失败的实例，但它们仍会占着一个控制台直到首次启动就绪。
+
+**"启动器里看不到上次启动报告"**
+
+报告来自 `launcher-status.json`，而它只有 **v0.2 的启动脚本**才会写。如果你的桌面快捷方式还是早期版本生成的，它跑的就是旧脚本，什么都不会记录。点一次面板上的**图标按钮**（或设置卡片里的"刷新/打开目录"）重新生成 `launcher.ps1`，下次双击就会有完整报告。这种状态下面板显示的是"（暂无记录）"。
 
 **"重启之后页面没回来"**
 

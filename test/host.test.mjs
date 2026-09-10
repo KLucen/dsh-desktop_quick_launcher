@@ -14,7 +14,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Readable } from 'node:stream'
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LAUNCHER_API, NONCE_HEADER, apply } from '../lib/index.mjs'
@@ -91,13 +91,14 @@ function harness(options = {}) {
     scriptsDir: join(home, 'desktop-quick-launcher'),
     setSessions(next) { sessions = next },
     nonce: options.nonce,
-    async call(path, { method = 'GET', headers = {}, body = null, remote = '127.0.0.1' } = {}) {
+    async call(path, { method = 'GET', headers = {}, body = null, remote = '127.0.0.1', query = '' } = {}) {
       const route = routes.get(path)
       assert.ok(route, `route not registered: ${path}`)
       const req = new Readable({ read() {} })
       req.method = method
       req.headers = { host: '127.0.0.1:3080', ...headers }
       req.socket = { remoteAddress: remote }
+      req.url = query === '' ? path : `${path}?${query}`
       if (body !== null) req.push(body)
       req.push(null)
       const res = {
@@ -151,6 +152,93 @@ test('status reports busy as unknown (fail-open) when there is no sessions servi
   assert.equal(result.json.launcher.report, null)
   assert.equal(result.json.restart.inflight, null)
   assert.match(result.json.logs.dir, /desktop-quick-launcher$/)
+  // The settings card drives these through the host config echo.
+  assert.equal(result.json.config.showDetailsButton, true)
+  assert.equal(result.json.config.showStopButton, true)
+  assert.equal(result.json.config.showRestartButton, true)
+  assert.equal(result.json.config.helperStartTimeoutMs, 400)
+})
+
+test('floating-button flags follow the config', async () => {
+  const app = harness({
+    sessions: { list: () => [] },
+    config: { showDetailsButton: false, showRestartButton: false },
+  })
+  const result = await app.call(LAUNCHER_API.status)
+  assert.equal(result.json.config.showDetailsButton, false)
+  assert.equal(result.json.config.showStopButton, true)
+  assert.equal(result.json.config.showRestartButton, false)
+})
+
+test('the log list covers the plugin directory and never leaves it', async () => {
+  const app = harness({ sessions: { list: () => [] } })
+  const empty = await app.call(LAUNCHER_API.logs)
+  assert.equal(empty.status, 200)
+  assert.equal(empty.json.dir, app.scriptsDir)
+  assert.equal(empty.json.files.length, 7)
+  assert.ok(empty.json.files.every(file => file.exists === false))
+
+  // A real launcher.log appears once the (regenerated) launcher has run.
+  mkdirSync(app.scriptsDir, { recursive: true })
+  writeFileSync(join(app.scriptsDir, 'launcher.log'), 'one\ntwo\nthree\n', 'utf8')
+  const listed = await app.call(LAUNCHER_API.logs)
+  const launcher = listed.json.files.find(file => file.name === 'launcher')
+  assert.equal(launcher.exists, true)
+  assert.equal(launcher.size, 14)
+
+  const content = await app.call(LAUNCHER_API.logs, { query: 'name=launcher&tail=2' })
+  assert.equal(content.status, 200)
+  assert.equal(content.json.text, 'two\nthree')
+
+  const missing = await app.call(LAUNCHER_API.logs, { query: 'name=childErr' })
+  assert.equal(missing.status, 200)
+  assert.equal(missing.json.text, '')
+
+  // The name is a whitelist key, never a path.
+  for (const attack of ['../../etc/passwd', 'C:\\Windows\\win.ini', 'launcher.log', '']) {
+    const res = await app.call(LAUNCHER_API.logs, { query: `name=${encodeURIComponent(attack)}` })
+    assert.equal(res.status, 404, `path traversal must be rejected: ${attack}`)
+  }
+})
+
+test('clearing logs truncates logs and deletes status files, and needs the nonce', async () => {
+  const app = harness({ sessions: { list: () => [] } })
+  mkdirSync(app.scriptsDir, { recursive: true })
+  writeFileSync(join(app.scriptsDir, 'launcher.log'), 'keep me not', 'utf8')
+  writeFileSync(join(app.scriptsDir, 'launcher-status.json'), '{"schema":1}', 'utf8')
+
+  const refused = await app.call(LAUNCHER_API.logsClear, { method: 'POST', body: '{}' })
+  assert.equal(refused.status, 403)
+  assert.equal(refused.json.code, 'nonce-required')
+
+  const ping = await app.call(LAUNCHER_API.ping)
+  const cleared = await app.call(LAUNCHER_API.logsClear, {
+    method: 'POST',
+    headers: { [NONCE_HEADER]: ping.json.nonce },
+    body: JSON.stringify({ names: ['launcher', 'launcherStatus'] }),
+  })
+  assert.equal(cleared.status, 200)
+  assert.deepEqual(cleared.json.cleared, ['launcher', 'launcherStatus'])
+  assert.equal(readFileSync(join(app.scriptsDir, 'launcher.log'), 'utf8'), '')
+  assert.equal(existsSync(join(app.scriptsDir, 'launcher-status.json')), false)
+
+  // An unknown name is ignored rather than failing the batch.
+  const ignored = await app.call(LAUNCHER_API.logsClear, {
+    method: 'POST',
+    headers: { [NONCE_HEADER]: ping.json.nonce },
+    body: JSON.stringify({ names: ['../evil'] }),
+  })
+  assert.equal(ignored.status, 200)
+  assert.deepEqual(ignored.json.cleared, [])
+})
+
+test('the open-folder route is gated by the nonce', async () => {
+  const app = harness({ sessions: { list: () => [] } })
+  const refused = await app.call(LAUNCHER_API.logsOpen, { method: 'POST', body: '{}' })
+  assert.equal(refused.status, 403)
+  const wrongMethod = await app.call(LAUNCHER_API.logsOpen)
+  assert.equal(wrongMethod.status, 405)
+  // The success path would open a real file manager, so it is not exercised here.
 })
 
 test('status reports the generating sessions from the session store', async () => {

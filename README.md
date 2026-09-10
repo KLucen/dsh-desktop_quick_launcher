@@ -52,6 +52,24 @@ Bottom-right of the page: **desktop icon / details**, **stop**, **restart**.
 - **Restart** hands over to a detached helper and reloads the page back into the same
   session once the new instance answers.
 
+### Settings card
+
+The plugin contributes its own page to **Settings** (the `settings.section` slot, next to the
+other plugin pages):
+
+- **Floating buttons** — three independent switches for the details, stop, and restart
+  buttons. Hide one, two, or all three (hiding all three removes the floating panel
+  entirely). The flags are ordinary plugin settings in the `desktop-quick-launcher`
+  namespace, so they persist in the profile settings file and can equally be edited from the
+  generic plugin-config editor.
+- **Logs and status files** — the card lists `launcher.log`, `restart-helper.log`,
+  `dsh-child.out.log`, `dsh-child.err.log`, `launcher-status.json`, `restart-status.json`
+  and `restart-inflight.json` with size and modification time, and offers **View** (tail),
+  **Clear** (per file or all), **Refresh**, and **Open folder**. Status files are deleted
+  rather than emptied, so the panel reports "nothing recorded yet" instead of a parse error.
+  The routes accept only these whitelisted names — never a caller-supplied path — and the
+  write side requires the nonce.
+
 ### Restarting safely
 
 The reason restart deserves its own section: restarting `dsh web` is the most common thing
@@ -126,13 +144,17 @@ does **not** stop a local process, which can read `/ping` itself.
 | `/api/dsh-desktop_quick_launcher/create` | POST | write the launcher script + desktop icon |
 | `/api/dsh-desktop_quick_launcher/restart` | POST | hand over to the detached helper, then exit (`409 busy` / `409 restart-inflight`) |
 | `/api/dsh-desktop_quick_launcher/shutdown` | POST | exit gracefully (`409 busy`) |
+| `/api/dsh-desktop_quick_launcher/logs` | GET | list the plugin's log/status files, or read one (`?name=&tail=`) |
+| `/api/dsh-desktop_quick_launcher/logs/clear` | POST | truncate logs / delete status files (`names` whitelist) |
+| `/api/dsh-desktop_quick_launcher/logs/open` | POST | reveal the log directory in the file manager |
 
 ### Settings
 
 A schemastery section (`desktop-quick-launcher` namespace): `enabled`, `announceToAgent`,
 `dshCommand`, `url`, `profile`, `iconPath`, `confirmShutdown`, `restartGraceMs` (1500),
 `restartTimeoutSec` (150), `busyPolicy` (`block` | `warn`), `restartMethod`
-(`auto` | `schtasks` | `detached`), `helperStartTimeoutMs` (8000), `showLaunchReport`.
+(`auto` | `schtasks` | `detached`), `helperStartTimeoutMs` (8000), `showDetailsButton`,
+`showStopButton`, `showRestartButton`, `showLaunchReport`.
 
 ### Client bundle that actually loads
 
@@ -248,6 +270,14 @@ Fetch `GET /api/dsh-desktop_quick_launcher/ping` first and replay its `nonce` in
 - Do not double-click the icon repeatedly while a first boot is still running: the mutex
   makes the extra invocations *wait* instead of spawning a doomed second server, but they
   will still hold a console open until the first boot is ready.
+
+**"The launcher shows no last-launch report"**
+
+The report comes from `launcher-status.json`, which only the **v0.2 launcher script** writes.
+If your desktop shortcut was created by an earlier version, it still runs that older script and
+nothing is recorded. Click the panel's **icon button** (or the settings card's Refresh/Open
+folder) once to regenerate `launcher.ps1`; the next double-click then produces a full report.
+The placeholder text in the panel reads "（暂无记录）" / "(nothing recorded yet)" in that state.
 
 **"The page did not come back after a restart"**
 

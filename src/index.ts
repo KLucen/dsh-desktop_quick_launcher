@@ -31,7 +31,7 @@
 
 import { execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { chmod, copyFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
@@ -69,6 +69,7 @@ import { findOpenTurns, type SessionEventLike, type SessionView } from './core/b
 import {
   parseStatusFile,
   stripBom,
+  tailLines,
   type BusySnapshot,
   type StatusFile,
 } from './core/status'
@@ -130,13 +131,22 @@ export const LAUNCHER_API = {
   restart: `${PLUGIN_ROUTE_PREFIX}/restart`,
   /** Request the host process to exit gracefully. */
   shutdown: `${PLUGIN_ROUTE_PREFIX}/shutdown`,
+  /** List the plugin's own log/status files. */
+  logs: `${PLUGIN_ROUTE_PREFIX}/logs`,
+  /** Truncate log files (or delete status files). */
+  logsClear: `${PLUGIN_ROUTE_PREFIX}/logs/clear`,
+  /** Reveal the log directory in the file manager. */
+  logsOpen: `${PLUGIN_ROUTE_PREFIX}/logs/open`,
 } as const
+
+/** Largest log payload returned by one /logs?name= read. */
+const MAX_LOG_CHARS = 200_000
 
 /** Nonce header required by every state-changing route. */
 export const NONCE_HEADER = 'x-dsh-ql-nonce'
 
 /** Plugin version, mirrored from package.json by hand. */
-export const PLUGIN_VERSION = '0.2.1'
+export const PLUGIN_VERSION = '0.2.2'
 
 /** How long a restart handover marker blocks a second restart. */
 const INFLIGHT_TTL_MS = 90_000
@@ -200,6 +210,12 @@ export interface Config {
   restartMethod?: string
   /** How long to wait for the helper to start working before cancelling. */
   helperStartTimeoutMs?: number
+  /** Show the desktop-icon/details button in the floating panel. */
+  showDetailsButton?: boolean
+  /** Show the stop button in the floating panel. */
+  showStopButton?: boolean
+  /** Show the restart button in the floating panel. */
+  showRestartButton?: boolean
   /** Show the last launcher report as a banner when the GUI loads. */
   showLaunchReport?: boolean
 }
@@ -217,6 +233,9 @@ export const Config: z<Config> = z.object({
   busyPolicy: z.string().default('block'),
   restartMethod: z.string().default('auto'),
   helperStartTimeoutMs: z.natural().default(DEFAULT_HELPER_START_TIMEOUT_MS),
+  showDetailsButton: z.boolean().default(true),
+  showStopButton: z.boolean().default(true),
+  showRestartButton: z.boolean().default(true),
   showLaunchReport: z.boolean().default(true),
 })
 
@@ -547,6 +566,23 @@ export function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void {
   /** Name of the scheduled task that carries the restart helper. */
   const restartTaskName = (): string => `DSH-Web-Restart-${portFromUrl(current().url ?? DEFAULT_URL)}`
 
+  /**
+   * Files the GUI may read or clear. A strict whitelist keyed by short names:
+   * the routes never accept a caller-supplied path, so no request can reach
+   * outside the plugin's own directory.
+   */
+  const LOG_FILES: Readonly<Record<string, string>> = {
+    launcher: LAUNCHER_FILES.launcherLog,
+    restart: LAUNCHER_FILES.helperLog,
+    childOut: LAUNCHER_FILES.childOut,
+    childErr: LAUNCHER_FILES.childErr,
+    launcherStatus: LAUNCHER_FILES.launcherStatus,
+    restartStatus: LAUNCHER_FILES.restartStatus,
+    inflight: LAUNCHER_FILES.restartInflight,
+  }
+  const logPath = (key: unknown): string | undefined =>
+    typeof key === 'string' && Object.hasOwn(LOG_FILES, key) ? pathIn(LOG_FILES[key]) : undefined
+
   /** Real listening port, falling back to the configured URL. */
   const resolvedPort = (): number => {
     try {
@@ -764,6 +800,19 @@ export function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void {
     return true
   }
 
+  /** Shared guard for GET routes: method + loopback fence. */
+  const guardGet = (request: IncomingMessage, res: ServerResponse): boolean => {
+    if ((request.method ?? 'GET') !== 'GET') {
+      writeJson(res, 405, { error: `method not allowed: ${request.method}` })
+      return false
+    }
+    if (!isLoopbackRequest(request)) {
+      writeJson(res, 403, { ok: false, code: 'forbidden', error: 'forbidden: loopback-only' })
+      return false
+    }
+    return true
+  }
+
   /** Instance identity payload shared by /ping and /status. */
   const instanceInfo = (): Record<string, unknown> => ({
     ok: true,
@@ -833,6 +882,10 @@ export function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void {
             confirmShutdown: value.confirmShutdown ?? true,
             busyPolicy: value.busyPolicy ?? 'block',
             restartMethod: value.restartMethod ?? 'auto',
+            showDetailsButton: value.showDetailsButton ?? true,
+            showStopButton: value.showStopButton ?? true,
+            showRestartButton: value.showRestartButton ?? true,
+            helperStartTimeoutMs: value.helperStartTimeoutMs ?? DEFAULT_HELPER_START_TIMEOUT_MS,
             showLaunchReport: value.showLaunchReport ?? true,
           },
           port: {
@@ -851,6 +904,96 @@ export function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void {
             childErr: pathIn(LAUNCHER_FILES.childErr),
           },
         })
+      },
+    }
+
+    const logsRoute: WebRoute = {
+      kind: 'exact',
+      path: LAUNCHER_API.logs,
+      handler: async (req, res) => {
+        if (!guardGet(req, res)) return
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const key = url.searchParams.get('name')
+
+        if (key === null) {
+          const files = await Promise.all(Object.entries(LOG_FILES).map(async ([name, file]) => {
+            const target = pathIn(file)
+            try {
+              const info = await stat(target)
+              return { name, file: target, exists: true, size: info.size, mtime: info.mtime.toISOString() }
+            } catch {
+              return { name, file: target, exists: false, size: 0, mtime: null }
+            }
+          }))
+          writeJson(res, 200, { ok: true, dir: scriptsDir(), files })
+          return
+        }
+
+        const target = logPath(key)
+        if (target === undefined) {
+          writeJson(res, 404, { ok: false, code: 'unknown-log', error: `unknown log: ${key}` })
+          return
+        }
+        const requested = Number(url.searchParams.get('tail') ?? '200')
+        const tail = clampNumber(Number.isFinite(requested) ? requested : 200, 200, 1, 2000)
+        try {
+          const text = await readFile(target, 'utf8')
+          const clipped = text.length > MAX_LOG_CHARS ? text.slice(-MAX_LOG_CHARS) : text
+          writeJson(res, 200, {
+            ok: true,
+            name: key,
+            file: target,
+            size: text.length,
+            truncated: text.length > MAX_LOG_CHARS,
+            text: tailLines(clipped, tail),
+          })
+        } catch (error) {
+          if ((error as { code?: string }).code === 'ENOENT') {
+            writeJson(res, 200, { ok: true, name: key, file: target, size: 0, truncated: false, text: '' })
+            return
+          }
+          writeJson(res, 500, { ok: false, code: 'read-failed', error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    }
+
+    const logsClearRoute: WebRoute = {
+      kind: 'exact',
+      path: LAUNCHER_API.logsClear,
+      handler: async (req, res) => {
+        if (!guardPost(req, res)) return
+        const body = await readJsonBody(req)
+        const requested = Array.isArray(body.names) ? body.names : Object.keys(LOG_FILES)
+        const cleared: string[] = []
+        for (const name of requested) {
+          const target = logPath(name)
+          if (target === undefined) continue
+          try {
+            // Status files are removed (an empty file would read as a parse
+            // error); logs are truncated so the path keeps working.
+            if (target.endsWith('.json')) await rm(target, { force: true })
+            else await writeFile(target, '', 'utf8')
+            cleared.push(String(name))
+          } catch { /* a locked file must not fail the whole request */ }
+        }
+        writeJson(res, 200, { ok: true, cleared })
+      },
+    }
+
+    const logsOpenRoute: WebRoute = {
+      kind: 'exact',
+      path: LAUNCHER_API.logsOpen,
+      handler: async (req, res) => {
+        if (!guardPost(req, res)) return
+        const dir = scriptsDir()
+        const opener = process.platform === 'win32' ? 'explorer.exe' : process.platform === 'darwin' ? 'open' : 'xdg-open'
+        try {
+          await mkdir(dir, { recursive: true })
+          await runCommand(opener, [dir])
+          writeJson(res, 200, { ok: true, dir })
+        } catch (error) {
+          writeJson(res, 500, { ok: false, code: 'open-failed', error: error instanceof Error ? error.message : String(error), dir })
+        }
       },
     }
 
@@ -993,6 +1136,9 @@ export function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void {
 
     disposers.push(ctx.webServer.register(pingRoute))
     disposers.push(ctx.webServer.register(statusRoute))
+    disposers.push(ctx.webServer.register(logsRoute))
+    disposers.push(ctx.webServer.register(logsClearRoute))
+    disposers.push(ctx.webServer.register(logsOpenRoute))
     disposers.push(ctx.webServer.register(createRoute))
     disposers.push(ctx.webServer.register(restartRoute))
     disposers.push(ctx.webServer.register(shutdownRoute))

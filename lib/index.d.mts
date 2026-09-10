@@ -323,11 +323,17 @@ declare const LAUNCHER_API: {
   readonly restart: "/api/dsh-desktop_quick_launcher/restart";
   /** Request the host process to exit gracefully. */
   readonly shutdown: "/api/dsh-desktop_quick_launcher/shutdown";
+  /** List the plugin's own log/status files. */
+  readonly logs: "/api/dsh-desktop_quick_launcher/logs";
+  /** Truncate log files (or delete status files). */
+  readonly logsClear: "/api/dsh-desktop_quick_launcher/logs/clear";
+  /** Reveal the log directory in the file manager. */
+  readonly logsOpen: "/api/dsh-desktop_quick_launcher/logs/open";
 };
 /** Nonce header required by every state-changing route. */
 declare const NONCE_HEADER = "x-dsh-ql-nonce";
 /** Plugin version, mirrored from package.json by hand. */
-declare const PLUGIN_VERSION = "0.2.1";
+declare const PLUGIN_VERSION = "0.2.2";
 /** Result of a desktop-icon creation. */
 interface CreateResult {
   ok: true;
@@ -373,6 +379,12 @@ interface Config {
   restartMethod?: string;
   /** How long to wait for the helper to start working before cancelling. */
   helperStartTimeoutMs?: number;
+  /** Show the desktop-icon/details button in the floating panel. */
+  showDetailsButton?: boolean;
+  /** Show the stop button in the floating panel. */
+  showStopButton?: boolean;
+  /** Show the restart button in the floating panel. */
+  showRestartButton?: boolean;
   /** Show the last launcher report as a banner when the GUI loads. */
   showLaunchReport?: boolean;
 }

@@ -25,10 +25,11 @@ declare const name = "dsh-desktop_quick_launcher";
 /** No cordis services are required in the browser. */
 declare const inject: string[];
 /**
- * Mount the floating control once into document.body.
- * @param _ctx - client root context (unused; kept for loader compatibility).
+ * Mount the floating control once into document.body, then register the
+ * settings card.
+ * @param ctx - client root context (used only for the settings section).
  */
-declare function apply(_ctx: unknown): void;
+declare function apply(ctx?: unknown): void;
 declare const _default: {
   name: string;
   inject: string[];
