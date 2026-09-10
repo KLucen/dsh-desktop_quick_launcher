@@ -20,7 +20,13 @@ if (!code.startsWith('window.__ModuleLoader__.load({')) {
 
 let registered = null
 const stubs = {
-  react: { createElement: () => null, useState: (v) => [v, () => {}] },
+  react: {
+    createElement: () => null,
+    useState: (v) => [v, () => {}],
+    useEffect: () => {},
+    useRef: (v) => ({ current: v }),
+    useCallback: (fn) => fn,
+  },
   'react-dom/client': { createRoot: () => ({ render: () => {} }) },
 }
 const requireStub = (specifier) => {

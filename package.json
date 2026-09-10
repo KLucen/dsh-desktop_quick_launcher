@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop_quick_launcher",
-  "version": "0.1.1",
-  "description": "Desktop quick launcher for dsh web (independent rebuild of the retired @linxin666/dsh-desktop-launcher): create a double-click desktop icon that starts dsh web and opens the Web GUI, plus a floating control in the Web UI to create/refresh the icon and to exit the host process gracefully.",
+  "version": "0.2.0",
+  "description": "Desktop quick launcher for dsh web (independent rebuild of the retired @linxin666/dsh-desktop-launcher): a double-click desktop icon that starts dsh web and opens the Web GUI with tiered port probing and captured child output, plus a floating Web UI panel to create/refresh the icon, restart the service through a detached helper, and exit the host gracefully — refusing to cut off an answer that is still generating.",
   "type": "module",
   "license": "Apache-2.0",
   "engines": {
@@ -68,6 +68,7 @@
   "scripts": {
     "build": "tsdown && node scripts/wrap-client.mjs && node scripts/verify-client.mjs",
     "typecheck": "tsc --noEmit",
+    "test": "pnpm build && node --test \"test/**/*.test.mjs\"",
     "watch": "node scripts/wrap-client.mjs --watch"
   }
 }

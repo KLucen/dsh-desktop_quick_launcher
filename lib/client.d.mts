@@ -2,14 +2,24 @@
 /**
  * dsh-desktop_quick_launcher — browser half.
  *
- * A small circular power button pinned to the bottom-right corner of the dsh
- * web page. Clicking it opens a custom confirmation dialog (instead of the
- * native confirm); confirming POSTs /api/dsh-desktop_quick_launcher/shutdown
- * and the host process exits gracefully. A second small button creates or
- * refreshes the desktop launcher icon (POST /create) with an inline toast.
+ * A small floating panel pinned to the bottom-right corner of the dsh web page:
  *
- * Zero client-SDK dependencies: plain fetch + react-dom, inline styles. The
- * Host half enforces the loopback-only fence on both routes.
+ *  - the icon button creates/refreshes the desktop icon and opens the details
+ *    popover (instance info, the last launcher report, the last restart report,
+ *    and the captured child tail);
+ *  - the power button stops the host (custom confirm dialog); the restart button
+ *    hands over to the host's detached helper and waits for the new instance
+ *    before reloading the page back into the same session.
+ *
+ * Safety rules the UI mirrors from the host:
+ *  - state-changing routes need the per-instance nonce fetched from /ping;
+ *  - while a turn is open (`busy.generating`) both buttons are disabled and the
+ *    panel offers "restart when idle" instead;
+ *  - an override ("force") exists but is reachable only through a second,
+ *    explicitly-worded confirmation.
+ *
+ * Zero client-SDK dependencies: plain fetch + react-dom, inline styles. The host
+ * half enforces the loopback fence, the nonce, and the busy guard.
  */
 declare const name = "dsh-desktop_quick_launcher";
 /** No cordis services are required in the browser. */
