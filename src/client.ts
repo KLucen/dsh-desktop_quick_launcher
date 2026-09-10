@@ -156,6 +156,7 @@ const T = {
     logReadFailed: '读取日志失败：',
     logClearFailed: '清空失败：',
     cardOffline: '无法连接插件宿主（/status 无响应），开关状态暂不可用。',
+    lastAction: '最近操作：',
     notWritable: '当前连接不允许写入设置（可能是远程访问的内存模式）。',
   },
   en: {
@@ -231,6 +232,7 @@ const T = {
     logReadFailed: 'Could not read the log: ',
     logClearFailed: 'Could not clear: ',
     cardOffline: 'Cannot reach the plugin host (/status did not answer), so the switches are unavailable.',
+    lastAction: 'Last action:',
     notWritable: 'This connection does not allow settings writes (a remote browser may be in memory mode).',
   },
 }[lang()]
@@ -242,6 +244,7 @@ const PHASE_TEXT: Record<string, { zh: string; en: string }> = {
   spawned: { zh: '正在启动 dsh', en: 'starting dsh' },
   ready: { zh: '成功：服务已就绪并打开浏览器', en: 'ok: service ready, browser opened' },
   'up-dsh': { zh: '服务已在运行', en: 'service was already running' },
+  starting: { zh: '服务已启动，等待 Web 界面就绪', en: 'service up, waiting for the Web UI' },
   'up-unknown': { zh: '端口被其他程序占用', en: 'the port is held by another program' },
   'port-no-response': { zh: '端口被占用但无响应（疑似僵死实例）', en: 'port held but unresponsive (likely a stuck instance)' },
   down: { zh: '端口空闲', en: 'port free' },
@@ -537,6 +540,31 @@ function RestartGlyph() {
   )
 }
 
+/**
+ * True while DSH's own modal surface is open (the settings panel, onboarding).
+ *
+ * Our widgets are appended to `document.body` outside `#root` and carry a very
+ * high z-index, so without this check they float above the settings dialog —
+ * and any element of ours sitting over its controls can swallow the clicks
+ * meant for it. Hiding while a modal is open is both cleaner and safer.
+ */
+function useModalOpen(): boolean {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    const check = (): void => {
+      try {
+        setOpen(document.querySelector('[aria-modal="true"], dialog[open]') !== null)
+      } catch {
+        setOpen(false)
+      }
+    }
+    check()
+    const id = window.setInterval(check, 600)
+    return () => { window.clearInterval(id) }
+  }, [])
+  return open
+}
+
 // ---- panel ----------------------------------------------------------------
 
 function FloatingPanel() {
@@ -553,6 +581,7 @@ function FloatingPanel() {
   const savedHref = useRef('')
   const beforeId = useRef('')
   const timer = useRef<number | null>(null)
+  const modalOpen = useModalOpen()
 
   const flash = useCallback((kind: Toast['kind'], text: string): void => {
     setToast({ kind, text })
@@ -824,6 +853,9 @@ function FloatingPanel() {
         : T.idle)
       : `${T.busyUnknown} — ${status.busy.check}`
 
+  // Never paint over DSH's own modal surfaces (see useModalOpen).
+  if (modalOpen) return null
+
   return createElement('div', null,
     toast === null ? null : createElement('div', {
       style: toast.kind === 'err' || toast.kind === 'warn' ? { ...TOAST, borderColor: '#E54D4D66' } : TOAST,
@@ -860,15 +892,8 @@ function FloatingPanel() {
       }, createElement(RestartGlyph)),
     ) : null,
 
-    (generating || phase === 'queued') && (showStop || showRestart) ? createElement('div', { style: INLINE_NOTE },
-      createElement('div', null, `${T.busyBlocked}: ${openTurns.length || '?'}${busyKnown ? '' : `（${T.busyUnknown}）`}`),
-      createElement('div', { style: { ...MUTED, marginTop: '4px' } }, T.busyHint),
-      createElement('div', { style: { marginTop: '8px' } },
-        phase === 'queued'
-          ? createElement('button', { type: 'button', style: BTN, onClick: () => { setPhase('idle'); setNote('') } }, T.cancelQueue)
-          : createElement('button', { type: 'button', style: BTN_PRIMARY, onClick: () => { setPhase('queued'); setNote(T.restartQueued) } }, T.restartQueued),
-      ),
-    ) : null,
+    // The persistent "an answer is generating" notice was removed on request:
+    // the disabled buttons plus their tooltip carry that information now.
 
     phase !== 'idle' && note !== '' ? createElement('div', {
       style: { ...TOAST, bottom: '220px', borderColor: phaseSeverity(phase) === 'error' ? '#E54D4D66' : undefined },
@@ -970,6 +995,8 @@ function LauncherSettingsSection() {
   const [dir, setDir] = useState('')
   const [viewing, setViewing] = useState<{ name: string; text: string; size: number } | null>(null)
   const [working, setWorking] = useState(false)
+  const [lastAction, setLastAction] = useState('')
+  const stamp = (): string => new Date().toLocaleTimeString()
 
   const loadOptions = useCallback(async (): Promise<void> => {
     const status = await getJson(API.status)
@@ -982,6 +1009,7 @@ function LauncherSettingsSection() {
   }, [])
 
   const refreshLogs = useCallback(async (): Promise<void> => {
+    setLastAction(`${T.refresh} ${stamp()}`)
     try {
       const response = await fetch(API.logs, { cache: 'no-store', credentials: 'same-origin' })
       if (!response.ok) {
@@ -1054,6 +1082,7 @@ function LauncherSettingsSection() {
   }
 
   const clearLogs = async (names: string[]): Promise<void> => {
+    setLastAction(`${names.length === 0 ? T.clearAll : T.clear} ${stamp()}`)
     const header = await freshNonce()
     if (header === null) {
       setNote(T.noNonce)
@@ -1074,6 +1103,7 @@ function LauncherSettingsSection() {
   }
 
   const openDir = async (): Promise<void> => {
+    setLastAction(`${T.openDir} ${stamp()}`)
     const header = await freshNonce()
     if (header === null) {
       setNote(T.noNonce)
@@ -1138,6 +1168,7 @@ function LauncherSettingsSection() {
 
     note === '' ? null : createElement('div', { style: { marginTop: '8px', color: '#E58A8A' } }, note),
     diagnostic === '' ? null : createElement('div', { style: { marginTop: '8px', color: '#E5C07B' } }, diagnostic),
+    lastAction === '' ? null : createElement('div', { style: { ...MUTED, marginTop: '8px', fontSize: '11px' } }, `${T.lastAction} ${lastAction}`),
   )
 }
 

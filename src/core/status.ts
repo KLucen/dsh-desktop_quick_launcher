@@ -60,6 +60,7 @@ export type LauncherPhase =
   | 'spawned'
   | 'ready'
   | 'up-dsh'
+  | 'starting'
   | 'up-unknown'
   | 'port-no-response'
   | 'down'

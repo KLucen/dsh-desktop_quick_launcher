@@ -80,6 +80,7 @@ test('phaseSeverity classifies both phase enums', () => {
   assert.equal(phaseSeverity('failed'), 'error')
   assert.equal(phaseSeverity('aborted-busy'), 'warn')
   assert.equal(phaseSeverity('handoff'), 'info')
+  assert.equal(phaseSeverity('starting'), 'info')
   assert.equal(phaseSeverity('something-new'), 'info')
 })
 

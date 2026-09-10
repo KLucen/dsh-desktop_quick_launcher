@@ -151,7 +151,7 @@ const MAX_LOG_CHARS = 200_000
 export const NONCE_HEADER = 'x-dsh-ql-nonce'
 
 /** Plugin version, mirrored from package.json by hand. */
-export const PLUGIN_VERSION = '0.2.3'
+export const PLUGIN_VERSION = '0.2.4'
 
 /** How long a restart handover marker blocks a second restart. */
 const INFLIGHT_TTL_MS = 90_000

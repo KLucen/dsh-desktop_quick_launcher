@@ -134,6 +134,19 @@ test('the launcher opens an authenticated URL, not the bare origin', () => {
   assert.match(LAUNCHER, /param\(\[string\]\$Target\)/)
 })
 
+test('readiness requires the Web UI, not just a live plugin route', () => {
+  // During startup the server answers 404 for every unclaimed path (the SPA
+  // fallback registers later), so a /ping-only probe opened the browser onto
+  // "HTTP ERROR 404" until the user refreshed.
+  assert.match(LAUNCHER, /function Test-GuiReady/)
+  assert.match(LAUNCHER, /if \(Test-GuiReady \$result\)/)
+  assert.match(LAUNCHER, /\$result\.probeClass = 'starting'/)
+  assert.match(LAUNCHER, /if \(\$probe\.probeClass -eq 'starting'\)/)
+  assert.match(LAUNCHER, /never spawn a second instance/)
+  assert.match(HELPER, /function Test-GuiReady/)
+  assert.match(HELPER, /\$result\.probeClass = 'starting'/)
+})
+
 test('restart helper restores the working directory and DSH_HOME', () => {
   // A scheduled task starts in %SystemRoot%\System32 with no DSH_HOME; both have
   // to be restored or the replacement comes up in the wrong workspace.

@@ -193,7 +193,7 @@ interface MutexInfo {
  * Launcher run outcome. The lifecycle values (`invoked`, `spawned`) are
  * progress markers; the rest double as the failure taxonomy the GUI renders.
  */
-type LauncherPhase = 'invoked' | 'mutex-held' | 'spawned' | 'ready' | 'up-dsh' | 'up-unknown' | 'port-no-response' | 'down' | 'dsh-not-found' | 'child-exit' | 'timeout-alive' | 'timeout-dead' | 'error';
+type LauncherPhase = 'invoked' | 'mutex-held' | 'spawned' | 'ready' | 'up-dsh' | 'starting' | 'up-unknown' | 'port-no-response' | 'down' | 'dsh-not-found' | 'child-exit' | 'timeout-alive' | 'timeout-dead' | 'error';
 /** `launcher-status.json` — written by the generated launcher script. */
 interface LauncherStatus {
   schema: 1;
@@ -337,7 +337,7 @@ declare const OPTION_FIELDS: readonly ["showDetailsButton", "showStopButton", "s
 /** Nonce header required by every state-changing route. */
 declare const NONCE_HEADER = "x-dsh-ql-nonce";
 /** Plugin version, mirrored from package.json by hand. */
-declare const PLUGIN_VERSION = "0.2.3";
+declare const PLUGIN_VERSION = "0.2.4";
 /** Result of a desktop-icon creation. */
 interface CreateResult {
   ok: true;
