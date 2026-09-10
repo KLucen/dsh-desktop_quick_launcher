@@ -527,3 +527,44 @@ curl.exe -s -X POST -H "x-dsh-ql-nonce: $nonce" -H 'content-type: application/js
 - 宿主演·真实路由处理器的 12 项集成测试（含 `409 busy`、`409 restart-inflight`、`202` 移交、退出前二次检查写 `aborted-busy` 且不退出、`forced` 覆盖、`busyPolicy: warn`）。
 
 **尚未完成**：在真实 `dsh web` 进程上跑过一次端到端重启（§7 的 Step 3）——那一步会终止当前会话所在的宿主，需要在装有新版本的实例上由 GUI 触发。
+
+---
+
+## 12. v0.2.1：首次真实重启暴露的两个 bug 与修复
+
+**现场（2026-09-10 18:02–18:03）**：用户点「重启服务」→ 宿主退出、页面断线 → 30 秒后服务没有回来，用户只能双击桌面图标手动拉起。
+
+**证据**：`restart-status.json` 停在 `phase: "handoff"`；`restart-helper.log` **完全不存在**（助手一行都没执行）；而同一时间我先前用**任务计划**启动的 rollout worker（`restart-v020.log`）完成了整个重启（18:00:25 杀 3080 → 18:00:29 起新实例 → 18:00:45 `/ping` 就绪）。
+
+### Bug 1：L1 detached 助手被宿主退出连带杀死（原设计假设错误）
+
+受控复现（脚本在 `%TEMP%\dql-probe`）：
+- 用与插件**完全相同**的参数 `spawn(powershell, [...], { detached: true, windowsHide: true, stdio: 'ignore' })`，父进程 2.5 s 后 `process.exit(0)` → 子进程日志**一行都没有**；
+- 同一套参数**前台**执行 → 两行日志齐全、退出码 0，`-WindowStyle Hidden` 也被接受。
+
+⇒ 参数没问题，**是存活失败**：detached 子进程随宿主进程树一起被杀（Node 无法设置 `CREATE_BREAKAWAY_FROM_JOB`，宿主退出的 tree kill / job close 会连坐它）。
+
+**修复**：`defaultSpawnSurvivor` 改为**任务计划优先**（`schtasks /create` + `/run`，父级是 Task Scheduler 服务，天然在进程树之外）；detached 降为 `restartMethod: 'detached'` 的显式选项与 `auto` 的降级分支。
+
+### Bug 2：任务计划环境的 cwd 与 DSH_HOME 都是错的
+
+实测任务计划里跑出来的进程：`cwd = C:\WINDOWS\system32`、`$env:DSH_HOME = ''`（PATH 含 nvm4w，`dsh` 可解析）。
+⇒ 即便助手起来了，新实例也会在**错误的 workspace** 下启动，自定义 DSH_HOME 也会丢。
+
+**修复**：`RestartSpec` 增加 `cwd` / `dshHome` 并烘进助手脚本；助手在启动新实例前 `Set-Location -LiteralPath $hostCwd`、`$env:DSH_HOME = $dshHome`，并给 `Start-Process` 传 `-WorkingDirectory`。
+
+### 新增安全网：启动验证门（防"服务变死"的关键）
+
+`POST /restart` 不再"启动助手就 202 然后退出"，而是：
+
+1. spawn/register 助手；
+2. **等助手把 `restart-status.json` 推进到 `handoff` 之后的阶段**（`helperStartTimeoutMs` 默认 8000，200 ms 一次轮询）；
+3. 只有确认助手**真的在跑**才回 202、才在二次 busy 检查后退出；否则写 `phase: "failed"`、清 inflight、回 `500 helper-not-started`，**宿主保持运行**。
+
+于是"重启机制坏掉"的最坏后果从"服务死掉、用户手工救"变成"一次失败的请求 + 服务照常在"。
+
+### v0.2.1 验证
+
+- `pnpm typecheck` 通过；`pnpm test` **40/40**（新增 3 项：助手恢复 cwd/DSH_HOME 的断言、`renderScheduledTaskCommand` 的引号契约、**助手从未启动 ⇒ 500 + 不退出 + `phase=failed` + inflight 已清**）。
+- `schtasks` 路径经 `execFile` 实测：`/create`、`/run` 均成功，助手进程确实执行，任务已清理。
+- 仍未做：在 0.2.1 实例上再点一次 GUI 重启按钮做端到端确认（最坏情况已被启动门兜住）。

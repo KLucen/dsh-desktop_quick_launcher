@@ -57,6 +57,17 @@ export interface RestartSpec {
   instanceIdBefore: string
   /** Readiness budget in seconds. */
   waitSeconds: number
+  /**
+   * Working directory the replacement must start in. A scheduled task starts in
+   * `%SystemRoot%\System32`, so this has to be restored explicitly — otherwise
+   * the new host comes up with the wrong workspace.
+   */
+  cwd: string
+  /**
+   * DSH home to export for the replacement. A scheduled task inherits the user
+   * environment, which may not carry a custom `DSH_HOME`.
+   */
+  dshHome: string
 }
 
 /** Default dsh command. */
@@ -138,6 +149,25 @@ export function desktopFileName(platform: LauncherPlatform): string {
     case 'darwin': return 'DeepSeek-Harness.command'
     case 'linux': return 'deepseek-harness.desktop'
   }
+}
+
+/** Arguments used to run a generated PowerShell script hidden. */
+export const HIDDEN_POWERSHELL_ARGS = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden'] as const
+
+/**
+ * Build the `schtasks /tr` command line for the restart helper.
+ *
+ * The value is handed to `schtasks` as ONE argument (argv, no shell), so only
+ * the paths that contain spaces need quoting — but quoting them is essential,
+ * since a `DSH_HOME` with a space would otherwise split the command line and
+ * `schtasks` would reject the parameters (observed as
+ * `Invalid argument/option - '-NoProfile'`).
+ * @param helperPath - absolute path of the generated restart helper.
+ * @returns the command line to store in the task.
+ */
+export function renderScheduledTaskCommand(helperPath: string): string {
+  const args = [...HIDDEN_POWERSHELL_ARGS, '-File', helperPath]
+  return `powershell.exe ${args.map(part => (part.includes(' ') ? `"${part}"` : part)).join(' ')}`
 }
 
 /** Single-quote a value for PowerShell (embedded quotes are doubled). */
@@ -579,6 +609,8 @@ export function renderRestartHelper(spec: RestartSpec): string {
     `$dshProfile = ${psSingle(spec.profile ?? '')}`,
     `$instanceIdBefore = ${psSingle(spec.instanceIdBefore)}`,
     `$waitSeconds = ${spec.waitSeconds}`,
+    `$dshHome = ${psSingle(spec.dshHome)}`,
+    `$hostCwd = ${psSingle(spec.cwd)}`,
     '$scriptDir = $PSScriptRoot',
     '$selfPid = $PID',
     `$log = Join-Path $scriptDir ${psSingle(LAUNCHER_FILES.helperLog)}`,
@@ -676,8 +708,14 @@ export function renderRestartHelper(spec: RestartSpec): string {
     '}',
     renderSpawnArguments(),
     '$spawnStart = Get-Date',
+    '# A scheduled task runs in %SystemRoot%\\System32 with no DSH_HOME set;',
+    '# restore both before starting the replacement.',
+    "try { Set-Location -LiteralPath $hostCwd } catch { Write-Log ('Set-Location failed: ' + $_) }",
+    '$env:DSH_HOME = $dshHome',
+    '$workingDir = $hostCwd',
+    'if (-not (Test-Path -LiteralPath $workingDir)) { $workingDir = $scriptDir }',
     'try {',
-    '  $newProcess = Start-Process -FilePath $filePath -ArgumentList $arguments -WindowStyle Hidden -PassThru -RedirectStandardOutput $childOut -RedirectStandardError $childErr',
+    '  $newProcess = Start-Process -FilePath $filePath -ArgumentList $arguments -WorkingDirectory $workingDir -WindowStyle Hidden -PassThru -RedirectStandardOutput $childOut -RedirectStandardError $childErr',
     '} catch {',
     "  Save-State -Phase 'failed' -Extra @{ error = ('启动新实例失败：' + $_); hint = '见 restart-helper.log' }",
     '  Clear-Inflight',

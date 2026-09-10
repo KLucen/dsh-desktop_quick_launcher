@@ -70,11 +70,19 @@ of it is destructive.
   restart button permanently useless, so `force: true` exists — reachable only through a
   second, explicitly worded confirmation ("force: this interrupts the answer"), and recorded
   as `forced: true` in the restart report.
-- **The helper outlives the host.** The host spawns it detached (falling back to a
-  scheduled task), then exits gracefully itself; the helper waits out the grace period,
-  verifies the old instance is gone, starts the replacement, and parses the new instance's
-  `dsh web: http://…/?token=…` line from the captured stdout (useful if your browser cookie
-  ever expires — see limitations). It **never** uses `taskkill /T`, because the helper is a
+- **The helper outlives the host — and proves it before the host dares to exit.** The host starts
+  the helper as a **scheduled task** (its process belongs to the Task Scheduler service, so the
+  host's own teardown cannot take it down), waits until the helper moves the shared status file
+  past `handoff`, and only then answers `202` and exits. If the helper never reports in, the
+  restart is **cancelled and the service keeps running** — a broken survivor mechanism can no
+  longer leave you with a dead server. `restartMethod: detached` pins the fallback (a plain
+  detached child), which is measurably less reliable: on Windows it was observed to be killed
+  together with the host's process tree *before executing a single statement*.
+  The helper waits out the grace period, verifies the old instance is gone, restores the working
+  directory and `DSH_HOME` (a scheduled task starts in `%SystemRoot%\System32` with no
+  `DSH_HOME`, so both must be restored explicitly), starts the replacement, and parses the new
+  instance's `dsh web: http://…/?token=…` line from the captured stdout (useful if your browser
+  cookie ever expires — see limitations). It **never** uses `taskkill /T`, because the helper is a
   descendant of the old host and `/T` would kill the helper itself.
 - **Why the page can come back by itself:** the browser session cookie is signed with a
   secret persisted in `$DSH_HOME/.credentials.yaml` (30-day default), so it survives a
@@ -124,7 +132,7 @@ does **not** stop a local process, which can read `/ping` itself.
 A schemastery section (`desktop-quick-launcher` namespace): `enabled`, `announceToAgent`,
 `dshCommand`, `url`, `profile`, `iconPath`, `confirmShutdown`, `restartGraceMs` (1500),
 `restartTimeoutSec` (150), `busyPolicy` (`block` | `warn`), `restartMethod`
-(`auto` | `detached` | `schtasks`), `showLaunchReport`.
+(`auto` | `schtasks` | `detached`), `helperStartTimeoutMs` (8000), `showLaunchReport`.
 
 ### Client bundle that actually loads
 
@@ -243,6 +251,12 @@ Fetch `GET /api/dsh-desktop_quick_launcher/ping` first and replay its `nonce` in
 
 **"The page did not come back after a restart"**
 
+- **v0.2.0 and earlier could do exactly this** (the handover helper was started as a detached
+  child, which Windows killed with the host's process tree, so the host exited and nothing
+  replaced it — `restart-status.json` stayed at `phase: "handoff"` and no `restart-helper.log`
+  appeared). Fixed in **v0.2.1**: the helper now goes through a scheduled task, and the host
+  refuses to exit until the helper has reported in, cancelling the restart otherwise.
+  Recover a stranded service with the desktop icon, or `dsh web` in a terminal.
 - `restart-status.json` records the outcome (`ready` / `timeout` / `failed` /
   `aborted-busy`) plus the new instance's token URL; the panel shows it under **Details**.
 - If your browser asks for authentication, open the `authUrl` from that report — the cookie
@@ -262,9 +276,12 @@ Fetch `GET /api/dsh-desktop_quick_launcher/ping` first and replay its `nonce` in
   to a LAN-exposed server.
 - The generated Windows icon is named `DSH-Web.lnk` and overwrites any same-named shortcut
   on the Desktop when you click "create/refresh".
-- The Windows restart helper is a PowerShell script: on locked-down machines where
-  PowerShell execution is blocked, only the L2 scheduled-task path (or manual restart) is
-  available.
+- The Windows restart helper is a PowerShell script launched through a scheduled task: on
+  locked-down machines where scheduled tasks are blocked, set `restartMethod: detached` (less
+  reliable) or restart manually.
+- `restartMethod: detached` runs the helper as an ordinary detached child. On Windows that child
+  can be killed together with the host's process tree, in which case the start-gate cancels the
+  restart and keeps the service alive instead of leaving it down.
 - POSIX launchers (macOS `.command`, Linux `.sh`/`.desktop`) are generated from the same
   template but were developed and verified on Windows; the restart helper is Windows-only
   (on POSIX, restart falls back to the host's own exit plus a manual start).

@@ -16,6 +16,7 @@ import {
   portFromUrl,
   renderLauncherScript,
   renderRestartHelper,
+  renderScheduledTaskCommand,
   resolveLauncherSpec,
 } from '../lib/index.mjs'
 
@@ -35,6 +36,8 @@ const RESTART_SPEC = {
   profile: 'web',
   instanceIdBefore: 'instance-before-1234',
   waitSeconds: 150,
+  cwd: 'C:\\work\\project',
+  dshHome: 'C:\\Users\\test\\.dsh',
 }
 
 const LAUNCHER = renderLauncherScript('win32', LAUNCHER_SPEC)
@@ -119,6 +122,27 @@ test('restart helper shares the probe and captures child output', () => {
   assert.match(HELPER, /function Get-PortOwner/)
   assert.match(HELPER, /-RedirectStandardOutput \$childOut -RedirectStandardError \$childErr/)
   assert.match(HELPER, /Get-ChildTail 15/)
+})
+
+test('restart helper restores the working directory and DSH_HOME', () => {
+  // A scheduled task starts in %SystemRoot%\System32 with no DSH_HOME; both have
+  // to be restored or the replacement comes up in the wrong workspace.
+  assert.match(HELPER, /\$hostCwd = 'C:\\work\\project'/)
+  assert.match(HELPER, /\$dshHome = 'C:\\Users\\test\\\.dsh'/)
+  assert.match(HELPER, /Set-Location -LiteralPath \$hostCwd/)
+  assert.match(HELPER, /\$env:DSH_HOME = \$dshHome/)
+  assert.match(HELPER, /-WorkingDirectory \$workingDir/)
+})
+
+test('schtasks command line quotes only the parts that need it', () => {
+  assert.equal(
+    renderScheduledTaskCommand('C:\\Users\\KLEE\\.dsh\\desktop-quick-launcher\\restart-helper.ps1'),
+    'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\\Users\\KLEE\\.dsh\\desktop-quick-launcher\\restart-helper.ps1',
+  )
+  assert.equal(
+    renderScheduledTaskCommand('C:\\Users\\Some User\\.dsh\\restart-helper.ps1'),
+    'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "C:\\Users\\Some User\\.dsh\\restart-helper.ps1"',
+  )
 })
 
 test('the generated PowerShell parses', { skip: process.platform !== 'win32' }, () => {

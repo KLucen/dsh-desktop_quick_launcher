@@ -41,7 +41,8 @@
 - **未结束的回合会阻断重启。** 宿主读取 live session，套用 `@deepseek-ai/dsh-session` 自己的开放回合判据（最后一个 `turn/start` / `turn/end` 边界决定），返回 `409 busy` 并列出相关会话。停止与重启都受此门控；面板在生成期间禁用两个按钮，改为提供**「等空闲后自动重启」**（客户端队列，上限 10 分钟，可取消）。
 - **移交过程中新开始的回合会取消重启。** 宿主在退出前会**再查一次**；若此时冒出新的回答，就写 `aborted-busy` 并且**不退出**。页面会提示"已取消：检测到新开始的回答"。
 - **逃生口是刻意的。** 如果某个回合永久卡住，硬阻断会让重启按钮彻底失效，所以保留了 `force: true` —— 但只能通过**二次、措辞明确**的确认（"强制：会中断正在生成的回答"）触达，并在重启报告里记为 `forced: true`。
-- **助手比宿主活得久。** 宿主先以 detached 方式拉起助手（失败则降级为计划任务），随后自己优雅退出；助手在宽限期后确认旧实例已消失、拉起新实例，并从捕获的 stdout 里解析新实例的 `dsh web: http://…/?token=…` 一行（浏览器 cookie 万一失效时有用——见"已知限制"）。助手**绝不使用 `taskkill /T`**：它是旧宿主的子孙进程，`/T` 会把它自己一起杀掉。
+- **助手比宿主活得久，而且必须先证明自己活着宿主才敢退出。** 宿主把助手作为**计划任务**启动（其进程属于任务计划服务，宿主自己的清理动不到它），然后**等助手把共享状态文件推进到 `handoff` 之后**，才回 202 并退出；如果助手始终没有报到，重启会被**取消、服务继续运行** —— 重启机制坏掉不再等于服务变死。`restartMethod: detached` 可钉住降级路径（普通 detached 子进程），它明显更不可靠：在 Windows 上实测它会在**执行任何一条语句之前**就随宿主的进程树被杀掉。
+  助手在宽限期后确认旧实例已消失，**恢复工作目录与 `DSH_HOME`**（计划任务的启动目录是 `%SystemRoot%\System32` 且没有 `DSH_HOME`，两者都必须显式还原），拉起新实例，并从捕获的 stdout 里解析新实例的 `dsh web: http://…/?token=…` 一行（浏览器 cookie 万一失效时有用——见"已知限制"）。助手**绝不使用 `taskkill /T`**：它是旧宿主的子孙进程，`/T` 会把它自己一起杀掉。
 - **页面为什么能自己回来：** 浏览器会话 cookie 的签名密钥持久化在 `$DSH_HOME/.credentials.yaml`（默认 30 天），因此**能跨重启存活**。客户端等到 `/ping` 返回一个与重启前**不同**的 `instanceId`，然后重新加载原 URL。
 - **同时只允许一次重启：** inflight 标记会让第二次请求得到 `409 restart-inflight`（双击出的两个标签页不会起两个助手）。
 
@@ -70,7 +71,7 @@
 
 ### 设置项
 
-schemastery 配置段（`desktop-quick-launcher` 命名空间）：`enabled`、`announceToAgent`、`dshCommand`、`url`、`profile`、`iconPath`、`confirmShutdown`、`restartGraceMs`（1500）、`restartTimeoutSec`（150）、`busyPolicy`（`block` | `warn`）、`restartMethod`（`auto` | `detached` | `schtasks`）、`showLaunchReport`。
+schemastery 配置段（`desktop-quick-launcher` 命名空间）：`enabled`、`announceToAgent`、`dshCommand`、`url`、`profile`、`iconPath`、`confirmShutdown`、`restartGraceMs`（1500）、`restartTimeoutSec`（150）、`busyPolicy`（`block` | `warn`）、`restartMethod`（`auto` | `schtasks` | `detached`）、`helperStartTimeoutMs`（8000）、`showLaunchReport`。
 
 ### 真正能被加载的客户端产物
 

@@ -14,7 +14,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Readable } from 'node:stream'
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LAUNCHER_API, NONCE_HEADER, apply } from '../lib/index.mjs'
@@ -24,6 +24,7 @@ const BASE_CONFIG = {
   url: 'http://127.0.0.1:3080',
   restartGraceMs: 200,
   restartTimeoutSec: 30,
+  helperStartTimeoutMs: 400,
 }
 
 /** A session with an unfinished turn, shaped like the real Session. */
@@ -45,6 +46,7 @@ function harness(options = {}) {
   const routes = new Map()
   const spawns = []
   const exits = []
+  const handoffWrites = []
   let sessions = options.sessions
 
   const ctx = {
@@ -64,10 +66,19 @@ function harness(options = {}) {
   }
 
   apply(ctx, { ...BASE_CONFIG, ...(options.config ?? {}) }, {
-    spawnSurvivor: async (helperPath) => {
+    spawnSurvivor: options.spawnSurvivor ?? (async (helperPath) => {
       spawns.push(helperPath)
+      const statusPath = join(home, 'desktop-quick-launcher', 'restart-status.json')
+      // Record what the host wrote before the helper touches it.
+      handoffWrites.push(JSON.parse(readFileSync(statusPath, 'utf8')))
+      // Mimic the real helper's first action: move the shared file past
+      // `handoff`, which is what the host's start-gate waits for.
+      const state = JSON.parse(readFileSync(statusPath, 'utf8'))
+      state.phase = 'verifying-old'
+      state.updatedAt = new Date().toISOString()
+      writeFileSync(statusPath, JSON.stringify(state, null, 2))
       return { pid: 4321, method: 'detached' }
-    },
+    }),
     requestExit: (code) => { exits.push(code) },
   })
 
@@ -76,6 +87,7 @@ function harness(options = {}) {
     routes,
     spawns,
     exits,
+    handoffWrites,
     scriptsDir: join(home, 'desktop-quick-launcher'),
     setSessions(next) { sessions = next },
     nonce: options.nonce,
@@ -250,12 +262,15 @@ test('an idle restart hands over: 202, status file, helper script, marker, then 
   assert.match(helper, new RegExp(ping.json.instanceId))
   assert.doesNotMatch(helper, /taskkill\.exe[^\r\n]*\/T/)
 
-  const handoff = JSON.parse(readFileSync(join(app.scriptsDir, 'restart-status.json'), 'utf8'))
+  const handoff = app.handoffWrites[0]
   assert.equal(handoff.phase, 'handoff')
   assert.equal(handoff.instanceIdBefore, ping.json.instanceId)
   assert.equal(handoff.hostPid, process.pid)
   assert.equal(handoff.forced, false)
   assert.equal(handoff.busyAtHandoff.generating, false)
+  // The (simulated) helper moved the shared file past `handoff`, which is the
+  // proof the host's start-gate waits for before it dares to exit.
+  assert.equal(JSON.parse(readFileSync(join(app.scriptsDir, 'restart-status.json'), 'utf8')).phase, 'verifying-old')
 
   const marker = JSON.parse(readFileSync(join(app.scriptsDir, 'restart-inflight.json'), 'utf8'))
   assert.equal(marker.instanceId, ping.json.instanceId)
@@ -299,8 +314,7 @@ test('forced restart skips the busy gate and records the override', async () => 
   })
   assert.equal(result.status, 202)
   assert.equal(result.json.forced, true)
-  const handoff = JSON.parse(readFileSync(join(app.scriptsDir, 'restart-status.json'), 'utf8'))
-  assert.equal(handoff.forced, true)
+  assert.equal(app.handoffWrites[0].forced, true)
   await sleep(1500)
   // Forced restarts go straight through the re-check.
   assert.deepEqual(app.exits, [0])
@@ -322,6 +336,31 @@ test('busyPolicy warn downgrades the gate to a report', async () => {
   assert.equal(result.status, 202)
   await sleep(1500)
   assert.deepEqual(app.exits, [0])
+})
+
+test('a helper that never starts cancels the restart and keeps the service alive', async () => {
+  // Exactly the failure that motivated the start-gate: the survivor mechanism
+  // produced no worker (the detached child was killed with the host's process
+  // tree), the host exited anyway, and the user was left with a dead service.
+  const app = harness({
+    sessions: { list: () => [] },
+    spawnSurvivor: async () => ({ pid: 777, method: 'detached' }),
+  })
+  const ping = await app.call(LAUNCHER_API.ping)
+  const result = await app.call(LAUNCHER_API.restart, {
+    method: 'POST',
+    headers: { [NONCE_HEADER]: ping.json.nonce },
+    body: JSON.stringify({}),
+  })
+
+  assert.equal(result.status, 500)
+  assert.equal(result.json.code, 'helper-not-started')
+  assert.deepEqual(app.exits, [], 'the host must stay alive when the helper never starts')
+  const status = JSON.parse(readFileSync(join(app.scriptsDir, 'restart-status.json'), 'utf8'))
+  assert.equal(status.phase, 'failed')
+  assert.match(status.error, /未开始工作/)
+  // The gate also releases the inflight marker so the user can retry at once.
+  assert.equal(existsSync(join(app.scriptsDir, 'restart-inflight.json')), false)
 })
 
 test('an idle shutdown acknowledges then exits', async () => {

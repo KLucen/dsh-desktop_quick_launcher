@@ -49,6 +49,7 @@ import {
   DEFAULT_GRACE_MS,
   DEFAULT_URL,
   DEFAULT_WAIT_SECONDS,
+  HIDDEN_POWERSHELL_ARGS,
   LAUNCHER_FILES,
   PLUGIN_ROUTE_PREFIX,
   desktopFileName,
@@ -56,6 +57,7 @@ import {
   renderDesktopEntry,
   renderLauncherScript,
   renderRestartHelper,
+  renderScheduledTaskCommand,
   renderShortcutInstaller,
   resolveLauncherSpec,
   scriptFileName,
@@ -75,7 +77,13 @@ import {
 // re-exports: keep the pure helpers reachable for tooling and the test suite
 // ---------------------------------------------------------------------------
 
-export { renderLauncherScript, renderRestartHelper, resolveLauncherSpec, portFromUrl } from './core/launcher'
+export {
+  renderLauncherScript,
+  renderRestartHelper,
+  renderScheduledTaskCommand,
+  resolveLauncherSpec,
+  portFromUrl,
+} from './core/launcher'
 export { findOpenTurns } from './core/busy'
 export {
   formatDuration,
@@ -128,10 +136,17 @@ export const LAUNCHER_API = {
 export const NONCE_HEADER = 'x-dsh-ql-nonce'
 
 /** Plugin version, mirrored from package.json by hand. */
-export const PLUGIN_VERSION = '0.2.0'
+export const PLUGIN_VERSION = '0.2.1'
 
 /** How long a restart handover marker blocks a second restart. */
 const INFLIGHT_TTL_MS = 90_000
+
+/**
+ * How long the host waits for the helper to prove it is running before it
+ * cancels the restart. This is the safety net that keeps a broken survivor
+ * mechanism from leaving the user with a dead service: the host stays alive.
+ */
+const DEFAULT_HELPER_START_TIMEOUT_MS = 8_000
 
 /** Delay between the 202 acknowledgement and the pre-exit busy re-check. */
 const RECHECK_DELAY_MS = 1_000
@@ -176,10 +191,15 @@ export interface Config {
    */
   busyPolicy?: string
   /**
-   * Survivor mechanism: `auto` tries a detached child first and falls back to
-   * schtasks, `schtasks` always uses a scheduled task.
+   * Survivor mechanism: `auto` (default) prefers a scheduled task and falls back
+   * to a detached child, `schtasks` pins the scheduled task, `detached` pins the
+   * detached child. The scheduled task wins because a detached child is
+   * routinely killed together with the host's process tree — verified on
+   * Windows, where the detached helper never even executed.
    */
   restartMethod?: string
+  /** How long to wait for the helper to start working before cancelling. */
+  helperStartTimeoutMs?: number
   /** Show the last launcher report as a banner when the GUI loads. */
   showLaunchReport?: boolean
 }
@@ -196,6 +216,7 @@ export const Config: z<Config> = z.object({
   restartTimeoutSec: z.natural().default(DEFAULT_WAIT_SECONDS),
   busyPolicy: z.string().default('block'),
   restartMethod: z.string().default('auto'),
+  helperStartTimeoutMs: z.natural().default(DEFAULT_HELPER_START_TIMEOUT_MS),
   showLaunchReport: z.boolean().default(true),
 })
 
@@ -523,6 +544,8 @@ export function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void {
   const restartStatusPath = (): string => pathIn(LAUNCHER_FILES.restartStatus)
   const inflightPath = (): string => pathIn(LAUNCHER_FILES.restartInflight)
   const helperPath = (): string => pathIn(LAUNCHER_FILES.restartHelper)
+  /** Name of the scheduled task that carries the restart helper. */
+  const restartTaskName = (): string => `DSH-Web-Restart-${portFromUrl(current().url ?? DEFAULT_URL)}`
 
   /** Real listening port, falling back to the configured URL. */
   const resolvedPort = (): number => {
@@ -547,6 +570,8 @@ export function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void {
       ...(value.profile === undefined || value.profile === '' ? {} : { profile: value.profile }),
       instanceIdBefore: instanceId,
       waitSeconds: value.restartTimeoutSec ?? DEFAULT_WAIT_SECONDS,
+      cwd: process.cwd(),
+      dshHome: dshHome(),
     }
   }
 
@@ -660,30 +685,63 @@ export function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void {
     return await defaultSpawnSurvivor(file)
   }
 
-  /** The production survivor ladder (L1 detached, L2 scheduled task). */
+  /**
+   * The production survivor ladder.
+   *
+   * The scheduled task is tried FIRST: its process is parented by the Task
+   * Scheduler service, so the host's own teardown cannot take it down. A
+   * detached child (the `detached` pin, and the fallback when schtasks is
+   * unavailable) is measurably less reliable on Windows — a detached helper was
+   * observed to be killed together with the host's process tree before it
+   * executed a single statement. The caller therefore verifies that the helper
+   * actually started and cancels the restart otherwise.
+   */
   const defaultSpawnSurvivor = async (file: string): Promise<{ pid: number; method: 'detached' | 'schtasks' }> => {
     const method = current().restartMethod ?? 'auto'
-    const powershellArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', file]
-    if (method !== 'schtasks') {
+    const powershellArgs = [...HIDDEN_POWERSHELL_ARGS, '-File', file]
+
+    if (method !== 'detached') {
       try {
-        const child = spawn('powershell.exe', powershellArgs, { detached: true, windowsHide: true, stdio: 'ignore' })
-        child.on('error', () => { /* contained: an unreachable powershell must not crash the host */ })
-        await new Promise<void>((resolve, reject) => {
-          child.once('spawn', () => { resolve() })
-          child.once('error', (error) => { reject(error) })
-        })
-        child.unref()
-        if (typeof child.pid === 'number' && child.pid > 0) return { pid: child.pid, method: 'detached' }
-      } catch { /* fall through to schtasks */ }
-      if (method === 'detached') throw new Error('detached spawn failed')
+        const taskName = restartTaskName()
+        const commandLine = renderScheduledTaskCommand(file)
+        const created = await runCommand('schtasks', ['/create', '/f', '/tn', taskName, '/tr', commandLine, '/sc', 'once', '/st', '00:00'])
+        if (created.code !== 0) throw new Error(`schtasks /create failed: ${created.stderr}`)
+        const ran = await runCommand('schtasks', ['/run', '/tn', taskName])
+        if (ran.code !== 0) throw new Error(`schtasks /run failed: ${ran.stderr}`)
+        return { pid: 0, method: 'schtasks' }
+      } catch (error) {
+        if (method === 'schtasks') throw error
+        // fall through to the detached child
+      }
     }
-    const taskName = `DSH-Web-Restart-${portFromUrl(current().url ?? DEFAULT_URL)}`
-    const commandLine = `powershell.exe ${powershellArgs.map(part => (part.includes(' ') ? `"${part}"` : part)).join(' ')}`
-    const created = await runCommand('schtasks', ['/create', '/f', '/tn', taskName, '/tr', commandLine, '/sc', 'once', '/st', '00:00'])
-    if (created.code !== 0) throw new Error(`schtasks /create failed: ${created.stderr}`)
-    const ran = await runCommand('schtasks', ['/run', '/tn', taskName])
-    if (ran.code !== 0) throw new Error(`schtasks /run failed: ${ran.stderr}`)
-    return { pid: 0, method: 'schtasks' }
+
+    const child = spawn('powershell.exe', powershellArgs, { detached: true, windowsHide: true, stdio: 'ignore' })
+    child.on('error', () => { /* contained: an unreachable powershell must not crash the host */ })
+    await new Promise<void>((resolve, reject) => {
+      child.once('spawn', () => { resolve() })
+      child.once('error', (error) => { reject(error) })
+    })
+    child.unref()
+    if (typeof child.pid === 'number' && child.pid > 0) return { pid: child.pid, method: 'detached' }
+    throw new Error('detached spawn returned no pid')
+  }
+
+  /**
+   * Wait until the helper proves it is running, i.e. until it moves the shared
+   * status file past `handoff`. Without this gate a broken survivor mechanism
+   * kills the host and never replaces it, leaving the user with a dead service.
+   * @param timeoutMs - how long to wait.
+   * @returns true when the helper wrote a later phase.
+   */
+  const waitForHelperStart = async (timeoutMs: number): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      await new Promise<void>((resolve) => { setTimeout(resolve, 200) })
+      const read = await readStatusFile(restartStatusPath())
+      const phase = (read.report as { phase?: unknown } | null)?.phase
+      if (typeof phase === 'string' && phase !== 'handoff') return true
+    }
+    return false
   }
 
   /** Nonce check for state-changing routes. */
@@ -856,6 +914,23 @@ export function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void {
             at: new Date().toISOString(),
             ttlMs: INFLIGHT_TTL_MS,
           })
+
+          // Do not exit until the helper has proven it is running: a survivor
+          // mechanism that silently fails must cancel the restart, not leave the
+          // user with a dead service.
+          const startTimeout = current().helperStartTimeoutMs ?? DEFAULT_HELPER_START_TIMEOUT_MS
+          const started = await waitForHelperStart(startTimeout)
+          if (!started) {
+            const message = `重启助手在 ${Math.round(startTimeout / 1000)} 秒内未开始工作，已取消本次重启（服务保持运行）`
+            await writeRestartPhase('failed', {
+              error: message,
+              hint: '检查任务计划是否可用（schtasks /run），或把 restartMethod 改为 detached',
+            })
+            await clearInflight()
+            writeJson(res, 500, { ok: false, code: 'helper-not-started', error: message, helper })
+            return
+          }
+
           writeJson(res, 202, {
             ok: true,
             accepted: true,
@@ -953,6 +1028,6 @@ export function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void {
       const marker = await readInflight()
       if (marker !== null && marker.instanceId !== instanceId) await clearInflight()
     } catch { /* nothing to clean */ }
-    await runCommand('schtasks', ['/delete', '/f', '/tn', `DSH-Web-Restart-${portFromUrl(current().url ?? DEFAULT_URL)}`])
+    await runCommand('schtasks', ['/delete', '/f', '/tn', restartTaskName()])
   })()
 }

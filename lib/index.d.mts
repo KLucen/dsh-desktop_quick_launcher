@@ -57,6 +57,17 @@ interface RestartSpec {
   instanceIdBefore: string;
   /** Readiness budget in seconds. */
   waitSeconds: number;
+  /**
+   * Working directory the replacement must start in. A scheduled task starts in
+   * `%SystemRoot%\System32`, so this has to be restored explicitly — otherwise
+   * the new host comes up with the wrong workspace.
+   */
+  cwd: string;
+  /**
+   * DSH home to export for the replacement. A scheduled task inherits the user
+   * environment, which may not carry a custom `DSH_HOME`.
+   */
+  dshHome: string;
 }
 /** Port implied by a URL, falling back to the plugin default. */
 declare function portFromUrl(url: string, fallback?: number): number;
@@ -68,6 +79,18 @@ declare function resolveLauncherSpec(config: {
   profile?: string;
   iconPath?: string;
 }): LauncherSpec;
+/**
+ * Build the `schtasks /tr` command line for the restart helper.
+ *
+ * The value is handed to `schtasks` as ONE argument (argv, no shell), so only
+ * the paths that contain spaces need quoting — but quoting them is essential,
+ * since a `DSH_HOME` with a space would otherwise split the command line and
+ * `schtasks` would reject the parameters (observed as
+ * `Invalid argument/option - '-NoProfile'`).
+ * @param helperPath - absolute path of the generated restart helper.
+ * @returns the command line to store in the task.
+ */
+declare function renderScheduledTaskCommand(helperPath: string): string;
 /**
  * PowerShell restart helper, generated per restart with every value baked in
  * (so the L2 `schtasks /tr` command line needs no argument quoting).
@@ -304,7 +327,7 @@ declare const LAUNCHER_API: {
 /** Nonce header required by every state-changing route. */
 declare const NONCE_HEADER = "x-dsh-ql-nonce";
 /** Plugin version, mirrored from package.json by hand. */
-declare const PLUGIN_VERSION = "0.2.0";
+declare const PLUGIN_VERSION = "0.2.1";
 /** Result of a desktop-icon creation. */
 interface CreateResult {
   ok: true;
@@ -341,10 +364,15 @@ interface Config {
    */
   busyPolicy?: string;
   /**
-   * Survivor mechanism: `auto` tries a detached child first and falls back to
-   * schtasks, `schtasks` always uses a scheduled task.
+   * Survivor mechanism: `auto` (default) prefers a scheduled task and falls back
+   * to a detached child, `schtasks` pins the scheduled task, `detached` pins the
+   * detached child. The scheduled task wins because a detached child is
+   * routinely killed together with the host's process tree — verified on
+   * Windows, where the detached helper never even executed.
    */
   restartMethod?: string;
+  /** How long to wait for the helper to start working before cancelling. */
+  helperStartTimeoutMs?: number;
   /** Show the last launcher report as a banner when the GUI loads. */
   showLaunchReport?: boolean;
 }
@@ -384,4 +412,4 @@ interface ApplyHooks {
  */
 declare function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void;
 //#endregion
-export { ApplyHooks, type BusySnapshot, type ChildInfo, Config, CreateResult, type KilledProcess, LAUNCHER_API, type LauncherPhase, type LauncherPlatform, type LauncherSpec, type LauncherStatus, type MutexInfo, NONCE_HEADER, type OpenTurn, PLUGIN_VERSION, type PortOwnerInfo, type ProbeClass, type ProbeInfo, type RestartPhase, type RestartSpec, type RestartStatus, type SessionEventLike, type SessionView, type StatusFile, apply, createDesktopShortcut, findOpenTurns, formatDuration, inject, isLauncherFailure, name, parseStatusFile, phaseSeverity, portFromUrl, renderLauncherScript, renderRestartHelper, resolveLauncherSpec, stripBom, tailLines };
+export { ApplyHooks, type BusySnapshot, type ChildInfo, Config, CreateResult, type KilledProcess, LAUNCHER_API, type LauncherPhase, type LauncherPlatform, type LauncherSpec, type LauncherStatus, type MutexInfo, NONCE_HEADER, type OpenTurn, PLUGIN_VERSION, type PortOwnerInfo, type ProbeClass, type ProbeInfo, type RestartPhase, type RestartSpec, type RestartStatus, type SessionEventLike, type SessionView, type StatusFile, apply, createDesktopShortcut, findOpenTurns, formatDuration, inject, isLauncherFailure, name, parseStatusFile, phaseSeverity, portFromUrl, renderLauncherScript, renderRestartHelper, renderScheduledTaskCommand, resolveLauncherSpec, stripBom, tailLines };
