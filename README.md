@@ -215,9 +215,12 @@ refreshed — it can stay linked to the previous version's store directory until
 3. Verify the entry ships `lib/client.js` (wrapped classic script) and `lib/index.mjs`,
    then restart `dsh web`.
 
-Upgrading from **0.1.x** also means regenerating the desktop icon (the panel's icon button):
-the launcher script format changed, and pulling a fresh `launcher.ps1` is what enables the
-tiered probe, the mutex, and the captured child output.
+Since **v0.2.5** you do **not** need to touch the desktop icon after an upgrade: the host
+rewrites an existing `launcher.ps1` on every boot, so an existing shortcut immediately runs
+the new script (before that, a shortcut kept running the script from whenever the icon was
+created — which is how two releases' worth of launcher fixes silently never took effect).
+The only case that needs a click is a **deleted** shortcut: open the launcher's details
+popover and press **"Rebuild the desktop shortcut"**.
 
 ## Troubleshooting
 
@@ -341,6 +344,25 @@ The test suite mounts the real host half against a stub cordis context and drive
 route handlers, with the helper spawn and the process exit injected (`ApplyHooks`) and
 `DSH_HOME` redirected to a temp directory — so it never spawns a helper, never exits the
 runner, and never touches your real profile or Desktop.
+
+## Changelog
+
+**Project rule: every push to `main` documents, in this section and in
+[`CHANGELOG.md`](./CHANGELOG.md), both the bugs it fixed and the features it added.** Commit
+messages alone do not count.
+
+| Version | Fixed | Added |
+| --- | --- | --- |
+| **v0.2.6** | the desktop shortcut could not be recreated from the UI after deletion (the icon button stopped calling create in 0.2.2, leaving it dead code); `package.json` version disagreed with `PLUGIN_VERSION` | one-click **Rebuild the desktop shortcut** in the details popover and the settings card; `GET /status` reports `shortcut { name, path, exists }` |
+| **v0.2.5** | **the launcher script was never updated** — a shortcut kept running the script from two releases earlier, so every launcher fix so far had silently never run; removed the Refresh / Open folder / Clear all buttons on request | the host rewrites an existing `launcher.ps1` on every boot (idempotent; never creates the icon) |
+| **v0.2.4** | the browser opened on `HTTP ERROR 404` because a `/ping` 200 was mistaken for "ready" (the SPA fallback registers later) | `Test-GuiReady` gate + the `starting` phase (the launcher waits instead of spawning a second instance); floating widgets hide while a DSH modal is open |
+| **v0.2.3** | the shortcut opened the bare origin and landed on `dsh web authentication required`; the settings card's buttons did nothing and the switches only looked right after a reload | `Resolve-OpenUrl` (token URL from `/ping` → child stdout → `auth-url.txt`); `POST /options`; `type="button"` everywhere; every failure now surfaces in the card |
+| **v0.2.2** | — | Settings card: per-button visibility switches, log/status file list with tail view and clear; `GET /logs`, `POST /logs/clear`, `POST /logs/open` (server-side name whitelist) |
+| **v0.2.1** | the restart helper was killed with the host's process tree (it never executed); a scheduled-task helper started in `System32` with no `DSH_HOME`; a failed handover left the service down | scheduled-task survivor (detached demoted to opt-in); the host verifies the helper started before exiting, and cancels the restart instead of dying |
+| **v0.2.0** | v0.1's probe treated any 2xx–4xx as ready and discarded the child's output | tiered probe, captured child stdout/stderr, machine-readable status files, single-instance mutex, one-click restart, per-instance nonce, and the "never cut off a generating answer" guard (409 busy, pre-exit re-check, confirmed override) |
+
+Full details, verification notes and known limitations per version: [`CHANGELOG.md`](./CHANGELOG.md).
+Release notes for the current release: [`docs/releases/`](./docs/releases).
 
 ## License
 

@@ -131,7 +131,7 @@ dsh --profile web --patch D:\path\to\dsh-desktop_quick_launcher\cordis.patch.yml
 2. 重新从 GitHub 安装（见上）。
 3. 确认该条目带有 `lib/client.js`（包装后的经典脚本）与 `lib/index.mjs`，然后重启 `dsh web`。
 
-从 **0.1.x** 升级还需要**重新生成桌面图标**（面板上的图标按钮）：启动脚本格式变了，拉一份新的 `launcher.ps1` 才会启用分级探针、互斥量和子进程输出捕获。
+从 **v0.2.5** 起，升级后**不需要**再动桌面图标：宿主每次启动都会重写已有的 `launcher.ps1`，现有快捷方式立刻用上新脚本。（在这之前，快捷方式会一直跑"创建图标那一刻"的脚本 —— 这正是两个版本的启动器修复悄无声息地从未生效的原因。）唯一需要点一下的情况是**快捷方式被删除**：打开启动器详情面板，点「重新生成桌面快捷方式」。
 
 ## 故障排查
 
@@ -201,6 +201,22 @@ pnpm test           # 先构建，再跑：单元测试、生成脚本的 PowerS
 ```
 
 测试套件会把真实的宿主半边挂到 stub cordis 上下文上，直接驱动真实的路由处理器，并且注入助手的 spawn 与进程退出（`ApplyHooks`）、把 `DSH_HOME` 指向临时目录 —— 因此它不会真的拉起助手、不会退出测试进程、也不会碰到你的真实 profile 或桌面。
+
+## 更新日志
+
+**工程规矩：每次 push 到 `main`，都必须在本节与 [`CHANGELOG.md`](./CHANGELOG.md) 写清本次"修复了哪些 bug、新增了哪些功能"。只写提交信息不算完成。**
+
+| 版本 | 修复 | 新增 |
+| --- | --- | --- |
+| **v0.2.6** | 删除快捷方式后界面无法恢复（0.2.2 起图标按钮不再调用创建逻辑，`onCreate` 成了死代码）；`package.json` 版本号与 `PLUGIN_VERSION` 不一致 | 详情面板与设置卡片里的**一键重建桌面快捷方式**；`GET /status` 新增 `shortcut { name, path, exists }`，缺失时主动提示 |
+| **v0.2.5** | **启动器脚本永远不更新** —— 快捷方式一直跑两个版本前的脚本，导致此前所有启动器修复都从未生效；按要求移除「刷新 / 打开目录 / 全部清空」三个按钮 | 宿主每次启动自动重写已有的 `launcher.ps1`（幂等、不创建图标），升级即生效 |
+| **v0.2.4** | 浏览器打开 `HTTP ERROR 404`（把 `/ping` 的 200 当成"就绪"，而 SPA 兜底还没注册） | `Test-GuiReady` 就绪门 + `starting` 阶段（只等待、不重复起实例）；DSH 模态框打开时隐藏悬浮件 |
+| **v0.2.3** | 快捷方式打开裸 origin 落到 `dsh web authentication required`；设置卡片按钮点了没反应、开关要刷新才正常 | `Resolve-OpenUrl`（`/ping` 的 token URL → 子进程 stdout → `auth-url.txt`）；`POST /options`；全部按钮补 `type="button"`；失败不再静默 |
+| **v0.2.2** | — | 设置卡片：三个悬浮按钮独立开关、日志/状态文件列表（末尾查看 + 清空）；`GET /logs`、`POST /logs/clear`、`POST /logs/open`（服务端名字白名单） |
+| **v0.2.1** | 重启助手被宿主进程树连坐杀死（一行都没执行）；计划任务助手启动在 `System32` 且无 `DSH_HOME`；移交失败会让服务变死 | 计划任务幸存者（detached 降为可选）；宿主**先确认助手真的在跑**才退出，否则取消重启、保持运行 |
+| **v0.2.0** | v0.1 的探针把任何 2xx–4xx 都当就绪，且丢弃子进程输出 | 分级探针、捕获子进程 stdout/stderr、机器可读状态文件、单实例互斥量、一键重启、per-instance nonce，以及「绝不切断正在生成的回答」（409 busy + 退出前二次检查 + 明确确认的 force） |
+
+每个版本的完整说明、验证记录与已知限制见 [`CHANGELOG.md`](./CHANGELOG.md)；当前发布说明见 [`docs/releases/`](./docs/releases)。
 
 ## 许可
 
