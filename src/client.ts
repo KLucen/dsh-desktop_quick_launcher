@@ -54,6 +54,14 @@ const API = {
 /** Settings namespace owned by the host half. */
 const NAMESPACE = 'desktop-quick-launcher'
 
+/**
+ * Version this bundle was built from. The browser half is served from disk, so
+ * it can be newer than the host process still running in memory — comparing the
+ * two is how the panel notices that a restart is needed (instead of, say,
+ * reporting a missing feature as a missing file).
+ */
+const CLIENT_VERSION = '0.2.7'
+
 /** Where this plugin's settings page sits in the settings nav. */
 const SECTION_ORDER = 60
 
@@ -126,7 +134,10 @@ const T = {
     shortcutTitle: '桌面快捷方式',
     shortcutPresent: '已存在。删除后可以随时用下面的按钮重建。',
     shortcutMissing: '不存在（可能被删除了）。点下面的按钮重建。',
+    shortcutUnknown: '无法确认：当前宿主版本较旧（不含该检测），重启服务后即可看到真实状态。',
     shortcutCreate: '重新生成桌面快捷方式',
+    versionSkew: '客户端与宿主版本不一致',
+    versionSkewBody: '请在面板上点「重启服务」让宿主加载新版本；在此之前部分信息可能显示不准确。',
     pid: 'PID',
     port: '端口',
     uptime: '运行时长',
@@ -206,7 +217,10 @@ const T = {
     shortcutTitle: 'Desktop shortcut',
     shortcutPresent: 'Present. If you delete it, rebuild it with the button below.',
     shortcutMissing: 'Missing (or never created). Rebuild it with the button below.',
+    shortcutUnknown: 'Unknown: the running host is older than this panel (it has no such check). Restart the service to see the real state.',
     shortcutCreate: 'Rebuild the desktop shortcut',
+    versionSkew: 'Panel and host versions differ',
+    versionSkewBody: 'Press "Restart service" so the host loads the new version; until then some information may be inaccurate.',
     pid: 'PID',
     port: 'Port',
     uptime: 'Uptime',
@@ -848,7 +862,12 @@ function FloatingPanel() {
 
   const launcherReport = status?.launcher.report ?? null
   const restartReport = status?.restart.report ?? null
+  const shortcutKnown = status?.shortcut !== undefined
   const shortcutExists = status?.shortcut?.exists === true
+  // The panel is served from disk while the host runs in memory: a fresh install
+  // without a restart produces exactly this skew, and it must be reported as
+  // "restart needed" rather than as missing data.
+  const versionSkew = status !== null && status.pluginVersion !== CLIENT_VERSION
   // Which floating buttons the user asked for (settings card → host config → here).
   const config = status?.config
   const showDetails = config?.showDetailsButton !== false
@@ -917,12 +936,16 @@ function FloatingPanel() {
       status === null
         ? createElement('div', { style: MUTED }, T.noData)
         : createElement('div', null,
+          versionSkew
+            ? createElement('div', { style: { color: '#E5C07B', marginBottom: '8px' } },
+              `${T.versionSkew}：client v${CLIENT_VERSION} / host v${status.pluginVersion}\n${T.versionSkewBody}`)
+            : null,
           // The shortcut is the one thing a user can delete by accident and then
           // have no way back, so its state leads the panel and rebuilds in one
           // click (deliberately not auto-recreated: a deletion stays deleted).
           createElement('div', { style: SECTION_TITLE }, T.shortcutTitle),
-          createElement('div', { style: shortcutExists ? MUTED : { color: '#E5C07B' } },
-            shortcutExists ? T.shortcutPresent : T.shortcutMissing),
+          createElement('div', { style: shortcutKnown && shortcutExists ? MUTED : { color: '#E5C07B' } },
+            !shortcutKnown ? T.shortcutUnknown : (shortcutExists ? T.shortcutPresent : T.shortcutMissing)),
           createElement('div', { style: { marginTop: '6px' } },
             createElement('button', {
               type: 'button',
@@ -1021,7 +1044,8 @@ function LauncherSettingsSection() {
   const [viewing, setViewing] = useState<{ name: string; text: string; size: number } | null>(null)
   const [working, setWorking] = useState(false)
   const [lastAction, setLastAction] = useState('')
-  const [shortcut, setShortcut] = useState<{ path: string; exists: boolean }>({ path: '', exists: false })
+  const [shortcut, setShortcut] = useState<{ path: string; known: boolean; exists: boolean }>({ path: '', known: false, exists: false })
+  const [skew, setSkew] = useState('')
   const stamp = (): string => new Date().toLocaleTimeString()
 
   const loadOptions = useCallback(async (): Promise<void> => {
@@ -1034,8 +1058,10 @@ function LauncherSettingsSection() {
     setSection((status.config ?? {}) as unknown as Record<string, unknown>)
     setShortcut({
       path: status.shortcut?.path ?? '',
+      known: status.shortcut !== undefined,
       exists: status.shortcut?.exists === true,
     })
+    setSkew(status.pluginVersion !== CLIENT_VERSION ? status.pluginVersion : '')
   }, [])
 
   const refreshLogs = useCallback(async (): Promise<void> => {
@@ -1174,9 +1200,11 @@ function LauncherSettingsSection() {
   )
 
   return createElement('div', { style: { fontSize: '13px', lineHeight: 1.7, maxWidth: '640px' } },
+    skew === '' ? null : createElement('div', { style: { color: '#E5C07B', marginBottom: '8px' } },
+      `${T.versionSkew}：client v${CLIENT_VERSION} / host v${skew}\n${T.versionSkewBody}`),
     createElement('div', { style: SECTION_TITLE }, T.shortcutTitle),
-    createElement('div', { style: shortcut.exists ? MUTED : { color: '#E5C07B' } },
-      shortcut.exists ? T.shortcutPresent : T.shortcutMissing),
+    createElement('div', { style: shortcut.known && shortcut.exists ? MUTED : { color: '#E5C07B' } },
+      !shortcut.known ? T.shortcutUnknown : (shortcut.exists ? T.shortcutPresent : T.shortcutMissing)),
     createElement('div', { style: { marginTop: '6px' } },
       createElement('button', {
         type: 'button',

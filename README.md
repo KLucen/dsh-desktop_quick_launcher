@@ -353,6 +353,7 @@ messages alone do not count.
 
 | Version | Fixed | Added |
 | --- | --- | --- |
+| **v0.2.7** | a fresh install without a host restart made the panel report the shortcut as missing — the browser bundle is served from disk, so it can be newer than the host process, whose older `/status` has no `shortcut` field | the panel and card now report the client/host version skew explicitly and ask for a restart; an absent field reads "unknown", not "missing" |
 | **v0.2.6** | the desktop shortcut could not be recreated from the UI after deletion (the icon button stopped calling create in 0.2.2, leaving it dead code); `package.json` version disagreed with `PLUGIN_VERSION` | one-click **Rebuild the desktop shortcut** in the details popover and the settings card; `GET /status` reports `shortcut { name, path, exists }` |
 | **v0.2.5** | **the launcher script was never updated** — a shortcut kept running the script from two releases earlier, so every launcher fix so far had silently never run; removed the Refresh / Open folder / Clear all buttons on request | the host rewrites an existing `launcher.ps1` on every boot (idempotent; never creates the icon) |
 | **v0.2.4** | the browser opened on `HTTP ERROR 404` because a `/ping` 200 was mistaken for "ready" (the SPA fallback registers later) | `Test-GuiReady` gate + the `starting` phase (the launcher waits instead of spawning a second instance); floating widgets hide while a DSH modal is open |
