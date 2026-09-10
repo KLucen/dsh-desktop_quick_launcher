@@ -1102,18 +1102,6 @@ function LauncherSettingsSection() {
     }
   }
 
-  const openDir = async (): Promise<void> => {
-    setLastAction(`${T.openDir} ${stamp()}`)
-    const header = await freshNonce()
-    if (header === null) {
-      setNote(T.noNonce)
-      return
-    }
-    try {
-      await postJson(API.logsOpen, {}, header)
-    } catch { /* the folder path is displayed anyway */ }
-  }
-
   const flag = (field: string, fallback: boolean): boolean =>
     typeof section[field] === 'boolean' ? section[field] as boolean : fallback
   const disabled = working
@@ -1137,11 +1125,6 @@ function LauncherSettingsSection() {
 
     createElement('div', { style: SECTION_TITLE }, T.logsTitle),
     createElement('div', { style: MUTED }, T.logsHint),
-    createElement('div', { style: { marginTop: '6px', display: 'flex', gap: '8px' } },
-      createElement('button', { type: 'button', style: SMALL_BTN, onClick: () => { void refreshLogs() } }, T.refresh),
-      createElement('button', { type: 'button', style: SMALL_BTN, onClick: () => { void openDir() } }, T.openDir),
-      createElement('button', { type: 'button', style: SMALL_BTN, disabled: working, onClick: () => { void clearLogs([]) } }, T.clearAll),
-    ),
     createElement('div', { style: { marginTop: '6px' } },
       files.length === 0
         ? createElement('div', { style: MUTED }, T.noData)

@@ -337,7 +337,7 @@ declare const OPTION_FIELDS: readonly ["showDetailsButton", "showStopButton", "s
 /** Nonce header required by every state-changing route. */
 declare const NONCE_HEADER = "x-dsh-ql-nonce";
 /** Plugin version, mirrored from package.json by hand. */
-declare const PLUGIN_VERSION = "0.2.4";
+declare const PLUGIN_VERSION = "0.2.5";
 /** Result of a desktop-icon creation. */
 interface CreateResult {
   ok: true;
@@ -403,6 +403,21 @@ declare module '@deepseek-ai/cordis' {
 /** Write the launcher script + place the desktop icon for the current platform. */
 declare function createDesktopShortcut(specSource: () => LauncherSpec): Promise<CreateResult>;
 /**
+ * Refresh an already-installed launcher script in place.
+ *
+ * The desktop shortcut points at a fixed path, so rewriting the script is what
+ * makes an upgrade take effect — without it a shortcut keeps running whatever
+ * version existed when the icon was created (which is exactly how a fixed
+ * launcher kept failing: the icon was still running a script from two releases
+ * earlier). Called on every boot; it never creates the icon itself.
+ * @param specSource - resolves the current launcher spec.
+ * @returns what happened, or null when no icon has been created yet.
+ */
+declare function refreshLauncherScript(specSource: () => LauncherSpec): Promise<{
+  path: string;
+  updated: boolean;
+} | null>;
+/**
  * Optional dependency injection for `apply`.
  *
  * Production never passes these. The test suite uses them to exercise the
@@ -428,4 +443,4 @@ interface ApplyHooks {
  */
 declare function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void;
 //#endregion
-export { ApplyHooks, type BusySnapshot, type ChildInfo, Config, CreateResult, type KilledProcess, LAUNCHER_API, type LauncherPhase, type LauncherPlatform, type LauncherSpec, type LauncherStatus, type MutexInfo, NONCE_HEADER, OPTION_FIELDS, type OpenTurn, PLUGIN_VERSION, type PortOwnerInfo, type ProbeClass, type ProbeInfo, type RestartPhase, type RestartSpec, type RestartStatus, type SessionEventLike, type SessionView, type StatusFile, apply, createDesktopShortcut, findOpenTurns, formatDuration, inject, isLauncherFailure, name, parseStatusFile, phaseSeverity, portFromUrl, renderLauncherScript, renderRestartHelper, renderScheduledTaskCommand, resolveLauncherSpec, stripBom, tailLines };
+export { ApplyHooks, type BusySnapshot, type ChildInfo, Config, CreateResult, type KilledProcess, LAUNCHER_API, type LauncherPhase, type LauncherPlatform, type LauncherSpec, type LauncherStatus, type MutexInfo, NONCE_HEADER, OPTION_FIELDS, type OpenTurn, PLUGIN_VERSION, type PortOwnerInfo, type ProbeClass, type ProbeInfo, type RestartPhase, type RestartSpec, type RestartStatus, type SessionEventLike, type SessionView, type StatusFile, apply, createDesktopShortcut, findOpenTurns, formatDuration, inject, isLauncherFailure, name, parseStatusFile, phaseSeverity, portFromUrl, refreshLauncherScript, renderLauncherScript, renderRestartHelper, renderScheduledTaskCommand, resolveLauncherSpec, stripBom, tailLines };

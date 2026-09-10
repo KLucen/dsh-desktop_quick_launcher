@@ -17,7 +17,10 @@ import { Readable } from 'node:stream'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { LAUNCHER_API, NONCE_HEADER, apply } from '../lib/index.mjs'
+import { LAUNCHER_API, NONCE_HEADER, apply, refreshLauncherScript } from '../lib/index.mjs'
+
+/** A minimal launcher spec for the refresh test. */
+const LAUNCHER_SPEC = { dshCommand: 'dsh', url: 'http://127.0.0.1:3080', port: 3080 }
 
 const BASE_CONFIG = {
   dshCommand: 'dsh',
@@ -528,6 +531,31 @@ test('the settings card writes its switches through /options', async () => {
   })
   assert.equal(unavailable.status, 503)
   assert.equal(unavailable.json.code, 'settings-unavailable')
+})
+
+test('an existing launcher script is refreshed on boot (the shortcut runs a fixed path)', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-ql-refresh-'))
+  process.env.DSH_HOME = home
+  const scriptsDir = join(home, 'desktop-quick-launcher')
+  mkdirSync(scriptsDir, { recursive: true })
+  const launcherPath = join(scriptsDir, 'launcher.ps1')
+
+  // No icon has been created yet: nothing to refresh.
+  assert.equal(await refreshLauncherScript(() => LAUNCHER_SPEC), null)
+
+  // A stale script (written by an older release) must be replaced — this is what
+  // makes an upgrade reach an existing desktop shortcut.
+  writeFileSync(launcherPath, 'stale script from an older version', 'utf8')
+  const first = await refreshLauncherScript(() => LAUNCHER_SPEC)
+  assert.equal(first.updated, true)
+  const written = readFileSync(launcherPath, 'utf8')
+  assert.match(written, /^\uFEFF# DSH web launcher/)
+  assert.match(written, /Test-GuiReady/)
+  assert.match(written, /Resolve-OpenUrl/)
+
+  // Idempotent: identical content is not rewritten.
+  const second = await refreshLauncherScript(() => LAUNCHER_SPEC)
+  assert.equal(second.updated, false)
 })
 
 test('an idle shutdown acknowledges then exits', async () => {

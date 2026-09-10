@@ -78,13 +78,7 @@ import {
 // re-exports: keep the pure helpers reachable for tooling and the test suite
 // ---------------------------------------------------------------------------
 
-export {
-  renderLauncherScript,
-  renderRestartHelper,
-  renderScheduledTaskCommand,
-  resolveLauncherSpec,
-  portFromUrl,
-} from './core/launcher'
+export { renderLauncherScript, renderRestartHelper, renderScheduledTaskCommand, resolveLauncherSpec, portFromUrl } from './core/launcher'
 export { findOpenTurns } from './core/busy'
 export {
   formatDuration,
@@ -151,7 +145,7 @@ const MAX_LOG_CHARS = 200_000
 export const NONCE_HEADER = 'x-dsh-ql-nonce'
 
 /** Plugin version, mirrored from package.json by hand. */
-export const PLUGIN_VERSION = '0.2.4'
+export const PLUGIN_VERSION = '0.2.5'
 
 /** How long a restart handover marker blocks a second restart. */
 const INFLIGHT_TTL_MS = 90_000
@@ -487,6 +481,33 @@ export async function createDesktopShortcut(specSource: () => LauncherSpec): Pro
     if (trust.code !== 0) warning = `desktop entry created but not marked trusted: ${trust.stderr}`
   }
   return { ok: true, path: iconPath, platform, ...(warning === undefined ? {} : { warning }) }
+}
+
+/**
+ * Refresh an already-installed launcher script in place.
+ *
+ * The desktop shortcut points at a fixed path, so rewriting the script is what
+ * makes an upgrade take effect — without it a shortcut keeps running whatever
+ * version existed when the icon was created (which is exactly how a fixed
+ * launcher kept failing: the icon was still running a script from two releases
+ * earlier). Called on every boot; it never creates the icon itself.
+ * @param specSource - resolves the current launcher spec.
+ * @returns what happened, or null when no icon has been created yet.
+ */
+export async function refreshLauncherScript(
+  specSource: () => LauncherSpec,
+): Promise<{ path: string; updated: boolean } | null> {
+  const platform = toLauncherPlatform(process.platform)
+  const scriptsDir = join(dshHome(), 'desktop-quick-launcher')
+  const launcherPath = join(scriptsDir, scriptFileName(platform))
+  if (!existsSync(launcherPath)) return null
+  const body = '\uFEFF' + renderLauncherScript(platform, specSource())
+  try {
+    if (await readFile(launcherPath, 'utf8') === body) return { path: launcherPath, updated: false }
+  } catch { /* unreadable: rewrite it */ }
+  await mkdir(scriptsDir, { recursive: true })
+  await writeFile(launcherPath, body, { mode: 0o755 })
+  return { path: launcherPath, updated: true }
 }
 
 // ---------------------------------------------------------------------------
@@ -1259,8 +1280,13 @@ export function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void {
   sync()
 
   // Housekeeping for a previous instance: its inflight marker and any leftover
-  // L2 scheduled task must not block this one.
+  // L2 scheduled task must not block this one. The launcher script is rewritten
+  // so an existing desktop shortcut picks up this version automatically — a
+  // shortcut must never keep running an older script than the plugin.
   void (async () => {
+    try {
+      await refreshLauncherScript(launcherSpec)
+    } catch { /* the script is regenerated on the next boot */ }
     try {
       const marker = await readInflight()
       if (marker !== null && marker.instanceId !== instanceId) await clearInflight()
