@@ -558,6 +558,17 @@ test('an existing launcher script is refreshed on boot (the shortcut runs a fixe
   assert.equal(second.updated, false)
 })
 
+test('status reports whether the desktop shortcut still exists', async () => {
+  const app = harness({ sessions: { list: () => [] } })
+  const result = await app.call(LAUNCHER_API.status)
+  assert.equal(typeof result.json.shortcut.exists, 'boolean')
+  assert.ok(result.json.shortcut.path.length > 0)
+  if (process.platform === 'win32') {
+    assert.equal(result.json.shortcut.name, 'DSH-Web.lnk')
+    assert.match(result.json.shortcut.path, /DSH-Web\.lnk$/)
+  }
+})
+
 test('an idle shutdown acknowledges then exits', async () => {
   const app = harness({ sessions: { list: () => [] } })
   const ping = await app.call(LAUNCHER_API.ping)

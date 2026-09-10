@@ -123,6 +123,10 @@ const T = {
     sectionLaunch: '上次启动报告',
     sectionRestart: '上次重启报告',
     sectionLogs: '日志',
+    shortcutTitle: '桌面快捷方式',
+    shortcutPresent: '已存在。删除后可以随时用下面的按钮重建。',
+    shortcutMissing: '不存在（可能被删除了）。点下面的按钮重建。',
+    shortcutCreate: '重新生成桌面快捷方式',
     pid: 'PID',
     port: '端口',
     uptime: '运行时长',
@@ -199,6 +203,10 @@ const T = {
     sectionLaunch: 'Last launch report',
     sectionRestart: 'Last restart report',
     sectionLogs: 'Logs',
+    shortcutTitle: 'Desktop shortcut',
+    shortcutPresent: 'Present. If you delete it, rebuild it with the button below.',
+    shortcutMissing: 'Missing (or never created). Rebuild it with the button below.',
+    shortcutCreate: 'Rebuild the desktop shortcut',
     pid: 'PID',
     port: 'Port',
     uptime: 'Uptime',
@@ -305,6 +313,7 @@ interface StatusPayload {
     inflight: { helperPid: number; at: string; ttlMs: number } | null
   }
   logs: { dir: string; launcherLog: string; restartLog: string; childOut: string; childErr: string }
+  shortcut?: { name: string; path: string; exists: boolean; error?: string }
 }
 
 // ---- client SDK seams (structural: this bundle imports no DSH client package) ----
@@ -839,6 +848,7 @@ function FloatingPanel() {
 
   const launcherReport = status?.launcher.report ?? null
   const restartReport = status?.restart.report ?? null
+  const shortcutExists = status?.shortcut?.exists === true
   // Which floating buttons the user asked for (settings card → host config → here).
   const config = status?.config
   const showDetails = config?.showDetailsButton !== false
@@ -907,6 +917,21 @@ function FloatingPanel() {
       status === null
         ? createElement('div', { style: MUTED }, T.noData)
         : createElement('div', null,
+          // The shortcut is the one thing a user can delete by accident and then
+          // have no way back, so its state leads the panel and rebuilds in one
+          // click (deliberately not auto-recreated: a deletion stays deleted).
+          createElement('div', { style: SECTION_TITLE }, T.shortcutTitle),
+          createElement('div', { style: shortcutExists ? MUTED : { color: '#E5C07B' } },
+            shortcutExists ? T.shortcutPresent : T.shortcutMissing),
+          createElement('div', { style: { marginTop: '6px' } },
+            createElement('button', {
+              type: 'button',
+              style: shortcutExists ? SMALL_BTN : BTN_PRIMARY,
+              disabled: working,
+              onClick: () => { void onCreate() },
+            }, T.shortcutCreate),
+          ),
+          createElement('pre', { style: MONO }, status.shortcut?.path ?? ''),
           createElement('div', { style: SECTION_TITLE }, T.sectionInstance),
           createElement('div', { style: MUTED },
             `${T.pid} ${status.pid} · ${T.port} ${status.port} · ${T.uptime} ${formatDuration(status.uptimeMs)} · ${T.version} ${status.pluginVersion}`),
@@ -996,6 +1021,7 @@ function LauncherSettingsSection() {
   const [viewing, setViewing] = useState<{ name: string; text: string; size: number } | null>(null)
   const [working, setWorking] = useState(false)
   const [lastAction, setLastAction] = useState('')
+  const [shortcut, setShortcut] = useState<{ path: string; exists: boolean }>({ path: '', exists: false })
   const stamp = (): string => new Date().toLocaleTimeString()
 
   const loadOptions = useCallback(async (): Promise<void> => {
@@ -1006,6 +1032,10 @@ function LauncherSettingsSection() {
     }
     setDiagnostic('')
     setSection((status.config ?? {}) as unknown as Record<string, unknown>)
+    setShortcut({
+      path: status.shortcut?.path ?? '',
+      exists: status.shortcut?.exists === true,
+    })
   }, [])
 
   const refreshLogs = useCallback(async (): Promise<void> => {
@@ -1102,6 +1132,33 @@ function LauncherSettingsSection() {
     }
   }
 
+  const createShortcut = async (): Promise<void> => {
+    setLastAction(`${T.shortcutCreate} ${stamp()}`)
+    setNote('')
+    const header = await freshNonce()
+    if (header === null) {
+      setNote(T.noNonce)
+      return
+    }
+    setWorking(true)
+    try {
+      const result = await postJson(API.create, {}, header)
+      if (result.status < 200 || result.status >= 300) {
+        setNote(T.errCreate + String(result.body.error ?? `HTTP ${result.status}`))
+        return
+      }
+      const info = (result.body.result ?? {}) as { path?: string; warning?: string }
+      setLastAction(info.warning === undefined
+        ? `${T.toastOk}${info.path ?? ''}`
+        : `${T.toastWarn}${info.warning}`)
+      await loadOptions()
+    } catch (error) {
+      setNote(T.errCreate + (error instanceof Error ? error.message : String(error)))
+    } finally {
+      setWorking(false)
+    }
+  }
+
   const flag = (field: string, fallback: boolean): boolean =>
     typeof section[field] === 'boolean' ? section[field] as boolean : fallback
   const disabled = working
@@ -1117,6 +1174,19 @@ function LauncherSettingsSection() {
   )
 
   return createElement('div', { style: { fontSize: '13px', lineHeight: 1.7, maxWidth: '640px' } },
+    createElement('div', { style: SECTION_TITLE }, T.shortcutTitle),
+    createElement('div', { style: shortcut.exists ? MUTED : { color: '#E5C07B' } },
+      shortcut.exists ? T.shortcutPresent : T.shortcutMissing),
+    createElement('div', { style: { marginTop: '6px' } },
+      createElement('button', {
+        type: 'button',
+        style: shortcut.exists ? SMALL_BTN : BTN_PRIMARY,
+        disabled: working,
+        onClick: () => { void createShortcut() },
+      }, T.shortcutCreate),
+    ),
+    shortcut.path === '' ? null : createElement('pre', { style: MONO }, shortcut.path),
+
     createElement('div', { style: SECTION_TITLE }, T.floatingButtons),
     createElement('div', { style: MUTED }, T.floatingButtonsHint),
     toggle('showDetailsButton', T.showDetails, true),

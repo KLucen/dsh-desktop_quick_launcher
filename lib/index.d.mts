@@ -337,7 +337,7 @@ declare const OPTION_FIELDS: readonly ["showDetailsButton", "showStopButton", "s
 /** Nonce header required by every state-changing route. */
 declare const NONCE_HEADER = "x-dsh-ql-nonce";
 /** Plugin version, mirrored from package.json by hand. */
-declare const PLUGIN_VERSION = "0.2.5";
+declare const PLUGIN_VERSION = "0.2.6";
 /** Result of a desktop-icon creation. */
 interface CreateResult {
   ok: true;

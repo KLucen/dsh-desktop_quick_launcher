@@ -145,7 +145,7 @@ const MAX_LOG_CHARS = 200_000
 export const NONCE_HEADER = 'x-dsh-ql-nonce'
 
 /** Plugin version, mirrored from package.json by hand. */
-export const PLUGIN_VERSION = '0.2.5'
+export const PLUGIN_VERSION = '0.2.6'
 
 /** How long a restart handover marker blocks a second restart. */
 const INFLIGHT_TTL_MS = 90_000
@@ -886,6 +886,23 @@ export function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void {
     authUrl,
   })
 
+  /**
+   * Whether the desktop shortcut is still there. The panel shows this, so a
+   * deleted (or never created) icon is noticed immediately and can be rebuilt in
+   * one click. It is deliberately NOT recreated automatically at boot: an
+   * intentional deletion must stay deleted.
+   */
+  const shortcutInfo = (): Record<string, unknown> => {
+    try {
+      const platform = toLauncherPlatform(process.platform)
+      const name = desktopFileName(platform)
+      const path = join(resolveDesktopDir(homedir(), platform), name)
+      return { name, path, exists: existsSync(path) }
+    } catch (error) {
+      return { name: '', path: '', exists: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
   /** Config echo shared by /status and /options. */
   const configEcho = (): Record<string, unknown> => {
     const value = current()
@@ -954,6 +971,7 @@ export function apply(ctx: Context, config?: Config, hooks?: ApplyHooks): void {
           ...instanceInfo(),
           busy: busySnapshot(now),
           config: configEcho(),
+          shortcut: shortcutInfo(),
           port: {
             listening: true,
             ownerPid: process.pid,
